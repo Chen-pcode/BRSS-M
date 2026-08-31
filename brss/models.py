@@ -64,12 +64,14 @@ class SelectiveStateSpace2D(nn.Module):
         if reverse:
             u, delta, b, c = (torch.flip(value, (-1,)) for value in (u, delta, b, c))
         state = torch.zeros_like(u[..., 0])
-        a = -F.softplus(self.log_a).view(1, -1, 1)
+        # Each recurrence step has tensors shaped [batch, channels]. Keeping
+        # A and D two-dimensional prevents batch/channel broadcast misalignment.
+        a = -F.softplus(self.log_a).view(1, -1)
         outputs = []
         for index in range(u.shape[-1]):
             dt = delta[..., index]
             state = torch.exp(a * dt) * state + dt * b[..., index] * u[..., index]
-            outputs.append(c[..., index] * state + self.d.view(1, -1, 1) * u[..., index])
+            outputs.append(c[..., index] * state + self.d.view(1, -1) * u[..., index])
         result = torch.stack(outputs, dim=-1)
         return torch.flip(result, (-1,)) if reverse else result
 
