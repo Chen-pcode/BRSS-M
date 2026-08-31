@@ -23,7 +23,10 @@ MODELS = [
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Controlled BRSS-MambaSeg ablation suite.")
-    parser.add_argument("--data-root", default="/kaggle/input/skin-lesion-data")
+    parser.add_argument("--data-root", default="./data")
+    parser.add_argument("--isic2017-root", default="/kaggle/input/datasets/zichengdoctor/isic2017")
+    parser.add_argument("--isic2018-root", default="/kaggle/input/datasets/zichengdoctor/isic2018")
+    parser.add_argument("--ph2-root", default="/kaggle/input/datasets/zichengdoctor/ph2dataset")
     parser.add_argument("--output-root", default="./outputs/ablations")
     parser.add_argument("--train-dataset", default="isic2018")
     parser.add_argument("--val-dataset", default="isic2018")
@@ -50,7 +53,7 @@ def main() -> None:
             if args.skip_completed and (output_dir / "summary.csv").exists():
                 print(f"Skipping completed run: {output_dir}")
                 continue
-            command = [sys.executable, "train.py", "--data-root", args.data_root, "--train-dataset", args.train_dataset, "--val-dataset", args.val_dataset, "--test-datasets", *args.test_datasets, "--model", actual_model, "--experiment-name", model, "--output-dir", str(output_dir), "--epochs", str(args.epochs), "--batch-size", str(args.batch_size), "--image-size", str(args.image_size), "--workers", str(args.workers), "--seed", str(seed)]
+            command = [sys.executable, "train.py", "--data-root", args.data_root, "--isic2017-root", args.isic2017_root, "--isic2018-root", args.isic2018_root, "--ph2-root", args.ph2_root, "--train-dataset", args.train_dataset, "--val-dataset", args.val_dataset, "--test-datasets", *args.test_datasets, "--model", actual_model, "--experiment-name", model, "--output-dir", str(output_dir), "--epochs", str(args.epochs), "--batch-size", str(args.batch_size), "--image-size", str(args.image_size), "--workers", str(args.workers), "--seed", str(seed)]
             if model == "brss_no_boundary_loss":
                 command.append("--no-boundary-loss")
             if model == "brss_final_boundary_only":

@@ -14,16 +14,21 @@ MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 
-def resolve_split(data_root: str | Path, dataset: str, split: str) -> tuple[Path, Path]:
+def resolve_split(data_root: str | Path, dataset: str, split: str, dataset_roots: dict[str, str | Path] | None = None) -> tuple[Path, Path]:
     root = Path(data_root)
+    dataset_roots = dataset_roots or {}
     key = dataset.lower()
     if key in {"isic2017", "2017", "isic2018", "2018"}:
         name = "isic2017" if "2017" in key else "isic2018"
         actual_split = "val" if split == "test" else split
-        base = root / name / actual_split
+        configured_root = Path(dataset_roots.get(name, root / name))
+        source_root = configured_root if configured_root.exists() else root / name
+        base = source_root / actual_split
         return base / "images", base / "masks"
     if key in {"ph2", "ph2dataset"}:
-        candidates = [root / "PH2Dataset" / "ph2" / "test", root / "ph2" / "test"]
+        configured_root = Path(dataset_roots.get("ph2", root / "PH2Dataset"))
+        source_root = configured_root if configured_root.exists() else root
+        candidates = [source_root / "ph2" / "test", source_root / "test", source_root / "PH2Dataset" / "ph2" / "test", root / "PH2Dataset" / "ph2" / "test", root / "ph2" / "test"]
         base = next((p for p in candidates if (p / "images").exists()), candidates[0])
         return base / "images", base / "masks"
     raise ValueError(f"Unknown dataset: {dataset}")
@@ -58,8 +63,8 @@ def mask_to_boundary(mask: torch.Tensor, width: int = 3) -> torch.Tensor:
 
 
 class SkinDataset(Dataset):
-    def __init__(self, data_root: str | Path, dataset: str, split: str, image_size: int = 256, augment: bool = False):
-        self.images, self.masks = resolve_split(data_root, dataset, split)
+    def __init__(self, data_root: str | Path, dataset: str, split: str, image_size: int = 256, augment: bool = False, dataset_roots: dict[str, str | Path] | None = None):
+        self.images, self.masks = resolve_split(data_root, dataset, split, dataset_roots)
         self.pairs = pair_files(self.images, self.masks)
         self.image_size = image_size
         self.augment = augment

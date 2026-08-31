@@ -16,7 +16,10 @@ from brss.utils import git_revision, model_stats, seed_everything, write_json
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train Boundary-Routed Selective State Space MambaSeg.")
-    parser.add_argument("--data-root", default="/kaggle/input/skin-lesion-data")
+    parser.add_argument("--data-root", default="./data", help="Fallback root for the original unified local data layout.")
+    parser.add_argument("--isic2017-root", default="/kaggle/input/datasets/zichengdoctor/isic2017")
+    parser.add_argument("--isic2018-root", default="/kaggle/input/datasets/zichengdoctor/isic2018")
+    parser.add_argument("--ph2-root", default="/kaggle/input/datasets/zichengdoctor/ph2dataset")
     parser.add_argument("--train-dataset", default="isic2018")
     parser.add_argument("--val-dataset", default="isic2018")
     parser.add_argument("--test-datasets", nargs="*", default=["isic2017", "PH2"])
@@ -50,8 +53,9 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     seed_everything(args.seed, args.deterministic)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    train_set = SkinDataset(args.data_root, args.train_dataset, "train", args.image_size, augment=True)
-    validation_set = SkinDataset(args.data_root, args.val_dataset, "val", args.image_size)
+    dataset_roots = {"isic2017": args.isic2017_root, "isic2018": args.isic2018_root, "ph2": args.ph2_root}
+    train_set = SkinDataset(args.data_root, args.train_dataset, "train", args.image_size, augment=True, dataset_roots=dataset_roots)
+    validation_set = SkinDataset(args.data_root, args.val_dataset, "val", args.image_size, dataset_roots=dataset_roots)
     train_loader, validation_loader = loader(train_set, args, True), loader(validation_set, args, False)
     model = get_model(args.model).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
@@ -76,7 +80,7 @@ def main() -> None:
     model.load_state_dict(checkpoint["model"])
     rows = []
     for name, split in [(args.val_dataset, "val")] + [(name, "test" if name.lower() in {"ph2", "ph2dataset"} else "val") for name in args.test_datasets]:
-        dataset = SkinDataset(args.data_root, name, split, args.image_size)
+        dataset = SkinDataset(args.data_root, name, split, args.image_size, dataset_roots=dataset_roots)
         metrics, samples = evaluate(model, loader(dataset, args, False), device, args.threshold, out / "predictions" / f"{name}_{split}" if args.save_predictions else None)
         samples.to_csv(out / f"samples_{name}_{split}.csv", index=False)
         rows.append({"model": experiment_name, "architecture": args.model, "seed": args.seed, "train_dataset": args.train_dataset, "eval_dataset": name, "split": split, "best_epoch": best_epoch, "runtime_min": (time.time() - started) / 60, **model_stats(model), **metrics})
