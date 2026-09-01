@@ -26,9 +26,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--model", choices=sorted(ABLATIONS), default="brss_mamba")
     parser.add_argument("--experiment-name", default=None, help="Result label; defaults to --model.")
     parser.add_argument("--output-dir", default="./outputs/brss_mamba")
-    parser.add_argument("--epochs", type=int, default=300)
-    parser.add_argument("--patience", type=int, default=80)
-    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--epochs", type=int, default=150)
+    parser.add_argument("--patience", type=int, default=30)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--image-size", type=int, default=256)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -40,6 +40,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--save-predictions", action="store_true")
     parser.add_argument("--no-boundary-loss", action="store_true")
     parser.add_argument("--no-multiscale-boundary-loss", action="store_true")
+    parser.add_argument("--resume", action="store_true", help="Continue from output-dir/latest.pt after a stopped session.")
     return parser.parse_args()
 
 
@@ -58,7 +59,8 @@ def main() -> None:
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     log_path = out / "train.log"
-    log_path.write_text("", encoding="utf-8")
+    if not args.resume:
+        log_path.write_text("", encoding="utf-8")
     seed_everything(args.seed, args.deterministic)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dataset_roots = {"isic2017": args.isic2017_root, "isic2018": args.isic2018_root, "ph2": args.ph2_root}
@@ -77,19 +79,43 @@ def main() -> None:
         f"validation={args.val_dataset} ({len(validation_set)}) | params={metadata['params']:,}",
         log_path,
     )
-    history, best_dice, best_epoch, started = [], -1.0, -1, time.time()
-    for epoch in range(1, args.epochs + 1):
+    history_path = out / "history.csv"
+    history, best_dice, best_epoch, first_epoch = [], -1.0, -1, 1
+    if args.resume:
+        latest_path = out / "latest.pt"
+        if not latest_path.exists():
+            raise FileNotFoundError(f"Cannot resume: missing {latest_path}")
+        latest = torch.load(latest_path, map_location=device, weights_only=False)
+        model.load_state_dict(latest["model"])
+        optimizer.load_state_dict(latest["optimizer"])
+        scheduler.load_state_dict(latest["scheduler"])
+        if scaler.is_enabled() and latest.get("scaler") is not None:
+            scaler.load_state_dict(latest["scaler"])
+        best_dice, best_epoch = latest["best_dice"], latest["best_epoch"]
+        first_epoch = latest["epoch"] + 1
+        history = pd.read_csv(history_path).to_dict("records") if history_path.exists() else []
+        log(f"Resuming from epoch {first_epoch}; best epoch={best_epoch}, best_dice={best_dice:.4f}", log_path)
+    started = time.time()
+    for epoch in range(first_epoch, args.epochs + 1):
         loss = train_epoch(model, train_loader, optimizer, scaler, device, args.amp, not args.no_boundary_loss, not args.no_multiscale_boundary_loss)
         scheduler.step()
         metrics, _ = evaluate(model, validation_loader, device, args.threshold)
         history.append({"epoch": epoch, "loss": loss, **{f"val_{key}": value for key, value in metrics.items()}})
-        pd.DataFrame(history).to_csv(out / "history.csv", index=False)
+        pd.DataFrame(history).to_csv(history_path, index=False)
         if metrics["dice"] > best_dice:
             best_dice, best_epoch = metrics["dice"], epoch
             torch.save({"model": model.state_dict(), "epoch": epoch, "dice": best_dice, "config": metadata}, out / "best.pt")
             marker = " [best checkpoint]"
         else:
             marker = ""
+        torch.save(
+            {
+                "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
+                "scaler": scaler.state_dict() if scaler.is_enabled() else None, "epoch": epoch,
+                "best_dice": best_dice, "best_epoch": best_epoch, "config": metadata,
+            },
+            out / "latest.pt",
+        )
         log(
             f"epoch={epoch:03d}/{args.epochs} loss={loss:.4f} val_dice={metrics['dice']:.4f} "
             f"val_iou={metrics['iou']:.4f} val_hd95={metrics['hd95']:.3f} best_epoch={best_epoch}{marker}",

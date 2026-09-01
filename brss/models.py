@@ -152,7 +152,11 @@ class BRSSMambaSeg(nn.Module):
         self.stem = ConvNormAct(3, widths[0])
         self.encoder = nn.ModuleList()
         for index in range(1, stages):
-            deep_start = 3 if stages >= 5 else 2
+            # The portable reference recurrence is confined to the two lowest
+            # resolutions (16/8 for the six-stage model). At 32x32 it creates
+            # thousands of Python-level steps per batch and exceeds Kaggle's
+            # session budget without using the GPU effectively.
+            deep_start = stages - 2
             self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_ssm and index >= deep_start, use_local_path, use_plain_scan, use_ssm_boundary_router))
         self.decoder = nn.ModuleList()
         for index in range(stages - 1, 0, -1):

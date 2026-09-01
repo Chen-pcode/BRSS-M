@@ -5,9 +5,10 @@ segmentation. It evaluates a six-resolution CNN-selective-state-space network
 with boundary-uncertainty-routed decoder fusion.
 
 The state-space block is a portable PyTorch reference implementation with
-input-dependent delta, B and C parameters. It is not described as VMamba or as
-an official Mamba kernel. This distinction is deliberate and should be retained
-in any paper.
+input-dependent delta, B and C parameters. It is applied only at the two
+lowest resolutions (16 x 16 and 8 x 8 in the six-stage model) so it is viable
+within a Kaggle GPU session. It is not described as VMamba or as an official
+Mamba kernel. This distinction is deliberate and should be retained in any paper.
 
 ## Layout
 
@@ -32,7 +33,7 @@ BRSS-MambaSeg/
 3. Run a smoke test before a full experiment:
 
 ```bash
-python train.py --epochs 2 --workers 2 --amp --output-dir /kaggle/working/smoke
+python train.py --epochs 2 --batch-size 32 --workers 2 --amp --output-dir /kaggle/working/smoke
 ```
 
 4. Run one proposed-model seed, inspect `config.json`, `history.csv`, and
@@ -64,3 +65,12 @@ Each run writes a checkpoint, immutable runtime/configuration metadata, epoch
 history, per-image CSV files and a protocol-level `summary.csv`. `summarize.py`
 creates `all_runs.csv` and `ablation_mean_std.csv`; these are the only files to
 use for paper tables.
+
+## Interrupted Runs
+
+`latest.pt` is saved after every completed epoch. After attaching a prior
+Kaggle output dataset and restoring its run directory, continue with:
+
+```bash
+python train.py --resume --output-dir /kaggle/working/full_seed2026 --amp
+```
