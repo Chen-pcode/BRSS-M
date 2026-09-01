@@ -33,11 +33,12 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--test-datasets", nargs="*", default=["isic2017", "PH2"])
     parser.add_argument("--models", nargs="*", choices=MODELS, default=MODELS)
     parser.add_argument("--seeds", nargs="*", type=int, default=[42, 1234, 2026])
-    parser.add_argument("--epochs", type=int, default=150)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--image-size", type=int, default=256)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--amp", action="store_true")
+    parser.add_argument("--compile", action="store_true")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--skip-completed", action="store_true", help="Skip a run when its summary.csv already exists.")
     return parser.parse_args()
@@ -60,6 +61,8 @@ def main() -> None:
                 command.append("--no-multiscale-boundary-loss")
             if args.amp:
                 command.append("--amp")
+            if args.compile:
+                command.append("--compile")
             if args.deterministic:
                 command.append("--deterministic")
             subprocess.run(command, check=True)

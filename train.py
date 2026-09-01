@@ -26,9 +26,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--model", choices=sorted(ABLATIONS), default="brss_mamba")
     parser.add_argument("--experiment-name", default=None, help="Result label; defaults to --model.")
     parser.add_argument("--output-dir", default="./outputs/brss_mamba")
-    parser.add_argument("--epochs", type=int, default=150)
-    parser.add_argument("--patience", type=int, default=30)
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--patience", type=int, default=60)
+    parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--image-size", type=int, default=256)
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -36,6 +36,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=2026)
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--amp", action="store_true")
+    parser.add_argument("--compile", action="store_true", help="Compile fixed-shape SSM recurrences with torch.compile on Kaggle.")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--save-predictions", action="store_true")
     parser.add_argument("--no-boundary-loss", action="store_true")
@@ -68,11 +69,20 @@ def main() -> None:
     validation_set = SkinDataset(args.data_root, args.val_dataset, "val", args.image_size, dataset_roots=dataset_roots)
     train_loader, validation_loader = loader(train_set, args, True), loader(validation_set, args, False)
     model = get_model(args.model).to(device)
+    if args.compile:
+        if device.type != "cuda" or not hasattr(torch, "compile"):
+            log("torch.compile is unavailable; using eager execution.", log_path)
+        else:
+            try:
+                model = torch.compile(model, mode="reduce-overhead")
+                log("Enabled torch.compile(mode=reduce-overhead) for the SSM recurrence.", log_path)
+            except Exception as error:
+                log(f"torch.compile failed ({error}); using eager execution.", log_path)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, eta_min=args.lr * 0.01)
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
     experiment_name = args.experiment_name or args.model
-    metadata = {**vars(args), "experiment_name": experiment_name, "device": str(device), "git_revision": git_revision(Path(__file__).parent), "dataset_counts": {"train": len(train_set), "validation": len(validation_set)}, **model_stats(model)}
+    metadata = {**vars(args), "experiment_name": experiment_name, "device": str(device), "git_revision": git_revision(Path(__file__).parent), "dataset_counts": {"train": len(train_set), "validation": len(validation_set)}, **model_stats(model._orig_mod if hasattr(model, "_orig_mod") else model)}
     write_json(out / "config.json", metadata)
     log(
         f"Starting {experiment_name} on {device} | train={args.train_dataset} ({len(train_set)}) | "
@@ -86,7 +96,8 @@ def main() -> None:
         if not latest_path.exists():
             raise FileNotFoundError(f"Cannot resume: missing {latest_path}")
         latest = torch.load(latest_path, map_location=device, weights_only=False)
-        model.load_state_dict(latest["model"])
+        state_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+        state_model.load_state_dict(latest["model"])
         optimizer.load_state_dict(latest["optimizer"])
         scheduler.load_state_dict(latest["scheduler"])
         if scaler.is_enabled() and latest.get("scaler") is not None:
@@ -104,13 +115,14 @@ def main() -> None:
         pd.DataFrame(history).to_csv(history_path, index=False)
         if metrics["dice"] > best_dice:
             best_dice, best_epoch = metrics["dice"], epoch
-            torch.save({"model": model.state_dict(), "epoch": epoch, "dice": best_dice, "config": metadata}, out / "best.pt")
+            state_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+            torch.save({"model": state_model.state_dict(), "epoch": epoch, "dice": best_dice, "config": metadata}, out / "best.pt")
             marker = " [best checkpoint]"
         else:
             marker = ""
         torch.save(
             {
-                "model": model.state_dict(), "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
+                "model": (model._orig_mod if hasattr(model, "_orig_mod") else model).state_dict(), "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
                 "scaler": scaler.state_dict() if scaler.is_enabled() else None, "epoch": epoch,
                 "best_dice": best_dice, "best_epoch": best_epoch, "config": metadata,
             },
@@ -125,13 +137,13 @@ def main() -> None:
             log(f"Early stopping at epoch {epoch}; best epoch={best_epoch}, best_dice={best_dice:.4f}", log_path)
             break
     checkpoint = torch.load(out / "best.pt", map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint["model"])
+    (model._orig_mod if hasattr(model, "_orig_mod") else model).load_state_dict(checkpoint["model"])
     rows = []
     for name, split in [(args.val_dataset, "val")] + [(name, "test" if name.lower() in {"ph2", "ph2dataset"} else "val") for name in args.test_datasets]:
         dataset = SkinDataset(args.data_root, name, split, args.image_size, dataset_roots=dataset_roots)
         metrics, samples = evaluate(model, loader(dataset, args, False), device, args.threshold, out / "predictions" / f"{name}_{split}" if args.save_predictions else None)
         samples.to_csv(out / f"samples_{name}_{split}.csv", index=False)
-        rows.append({"model": experiment_name, "architecture": args.model, "seed": args.seed, "train_dataset": args.train_dataset, "eval_dataset": name, "split": split, "best_epoch": best_epoch, "runtime_min": (time.time() - started) / 60, **model_stats(model), **metrics})
+        rows.append({"model": experiment_name, "architecture": args.model, "seed": args.seed, "train_dataset": args.train_dataset, "eval_dataset": name, "split": split, "best_epoch": best_epoch, "runtime_min": (time.time() - started) / 60, **model_stats(model._orig_mod if hasattr(model, "_orig_mod") else model), **metrics})
     pd.DataFrame(rows).to_csv(out / "summary.csv", index=False)
     log("Final evaluation:\n" + pd.DataFrame(rows).to_string(index=False), log_path)
 

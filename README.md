@@ -33,7 +33,7 @@ BRSS-MambaSeg/
 3. Run a smoke test before a full experiment:
 
 ```bash
-python train.py --epochs 2 --batch-size 32 --workers 2 --amp --output-dir /kaggle/working/smoke
+python train.py --epochs 2 --batch-size 16 --workers 2 --amp --compile --output-dir /kaggle/working/smoke
 ```
 
 4. Run one proposed-model seed, inspect `config.json`, `history.csv`, and
