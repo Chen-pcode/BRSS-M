@@ -5,10 +5,13 @@ segmentation. It evaluates a six-resolution CNN-selective-state-space network
 with boundary-uncertainty-routed decoder fusion.
 
 The state-space block is a portable PyTorch reference implementation with
-input-dependent delta, B and C parameters. It is applied only at the two
-lowest resolutions (16 x 16 and 8 x 8 in the six-stage model) so it is viable
-within a Kaggle GPU session. It is not described as VMamba or as an official
-Mamba kernel. This distinction is deliberate and should be retained in any paper.
+input-dependent delta, B and C parameters. It is enabled only from the layer
+that produces a 16 x 16 feature map onward for 256 x 256 inputs. Therefore,
+the six-stage model uses 16 x 16 and 8 x 8 SSM blocks, the five-stage model
+uses only 16 x 16, and the four-stage model uses none. This fixed-resolution
+rule keeps depth ablations computationally comparable and viable within a
+Kaggle GPU session. It is not described as VMamba or as an official Mamba
+kernel. This distinction is deliberate and should be retained in any paper.
 
 ## Layout
 

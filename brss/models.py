@@ -151,13 +151,12 @@ class BRSSMambaSeg(nn.Module):
         widths = {4: [base, base, base * 2, base * 4], 5: [base, base, base * 2, base * 3, base * 4], 6: [base, base, base * 2, base * 3, base * 4, base * 6]}[stages]
         self.stem = ConvNormAct(3, widths[0])
         self.encoder = nn.ModuleList()
+        # Keep the reference SSM at or below 16x16 for 256x256 inputs. The
+        # stage index is tied to the spatial downsampling, not to stage count.
+        ssm_start_index = 4
         for index in range(1, stages):
-            # The portable reference recurrence is confined to the two lowest
-            # resolutions (16/8 for the six-stage model). At 32x32 it creates
-            # thousands of Python-level steps per batch and exceeds Kaggle's
-            # session budget without using the GPU effectively.
-            deep_start = stages - 2
-            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_ssm and index >= deep_start, use_local_path, use_plain_scan, use_ssm_boundary_router))
+            # At 256x256 this corresponds to 16x16 and smaller feature maps.
+            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_ssm and index >= ssm_start_index, use_local_path, use_plain_scan, use_ssm_boundary_router))
         self.decoder = nn.ModuleList()
         for index in range(stages - 1, 0, -1):
             self.decoder.append(BoundaryFusion(widths[index], widths[index - 1], widths[index - 1], use_decoder_boundary_router, use_cross_scale))
