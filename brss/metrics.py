@@ -11,7 +11,16 @@ def sample_metrics(prediction: np.ndarray, target: np.ndarray) -> dict[str, floa
     eps = 1e-7
     dice = (2 * tp + eps) / (2 * tp + fp + fn + eps)
     iou = (tp + eps) / (tp + fp + fn + eps)
-    return {"dice": float(dice), "iou": float(iou), "accuracy": float((tp + tn + eps) / (tp + tn + fp + fn + eps)), "hd95": hd95(p, t)}
+    sensitivity = (tp + eps) / (tp + fn + eps)
+    specificity = (tn + eps) / (tn + fp + eps)
+    return {
+        "dice": float(dice),
+        "iou": float(iou),
+        "accuracy": float((tp + tn + eps) / (tp + tn + fp + fn + eps)),
+        "sensitivity": float(sensitivity),
+        "specificity": float(specificity),
+        "hd95": hd95(p, t),
+    }
 
 
 def hd95(prediction: np.ndarray, target: np.ndarray) -> float:

@@ -75,9 +75,11 @@ python run_ablations.py --train-dataset isic2017 --val-dataset isic2017 --test-d
 ## Output Contract
 
 Each run writes a checkpoint, immutable runtime/configuration metadata, epoch
-history, per-image CSV files and a protocol-level `summary.csv`. `summarize.py`
-creates `all_runs.csv` and `ablation_mean_std.csv`; these are the only files to
-use for paper tables.
+history, per-image CSV files and a protocol-level `summary.csv`. The summary
+reports Params (M), estimated FLOPs (G) for one 256 x 256 image, FP32 model
+size (MB), Dice, IoU, accuracy, sensitivity, specificity and HD95.
+`summarize.py` creates `all_runs.csv` and `ablation_mean_std.csv`; these are
+the only files to use for paper tables.
 
 ## Interrupted Runs
 

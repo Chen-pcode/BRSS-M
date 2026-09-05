@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from brss.data import SkinDataset
 from brss.engine import evaluate, train_epoch
 from brss.models import ABLATIONS, get_model
-from brss.utils import git_revision, model_stats, seed_everything, write_json
+from brss.utils import estimate_flops, git_revision, model_stats, seed_everything, write_json
 
 
 LOSS_ABLATIONS = {
@@ -95,11 +95,14 @@ def main() -> None:
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, eta_min=args.lr * 0.01)
     scaler = torch.amp.GradScaler("cuda", enabled=args.amp and device.type == "cuda")
     experiment_name = args.experiment_name or args.model
-    metadata = {**vars(args), "experiment_name": experiment_name, "device": str(device), "git_revision": git_revision(Path(__file__).parent), "dataset_counts": {"train": len(train_set), "validation": len(validation_set)}, **model_stats(model._orig_mod if hasattr(model, "_orig_mod") else model)}
+    state_model = model._orig_mod if hasattr(model, "_orig_mod") else model
+    complexity = {**model_stats(state_model), "flops_g": estimate_flops(state_model, args.image_size, device)}
+    metadata = {**vars(args), "experiment_name": experiment_name, "device": str(device), "git_revision": git_revision(Path(__file__).parent), "dataset_counts": {"train": len(train_set), "validation": len(validation_set)}, **complexity}
     write_json(out / "config.json", metadata)
     log(
         f"Starting {experiment_name} on {device} | train={args.train_dataset} ({len(train_set)}) | "
-        f"validation={args.val_dataset} ({len(validation_set)}) | params={metadata['params']:,}",
+        f"validation={args.val_dataset} ({len(validation_set)}) | params={metadata['params_m']:.3f}M | "
+        f"FLOPs={metadata['flops_g']:.3f}G | model_size={metadata['model_size_mb']:.3f}MB",
         log_path,
     )
     history_path = out / "history.csv"
@@ -156,7 +159,7 @@ def main() -> None:
         dataset = SkinDataset(args.data_root, name, split, args.image_size, dataset_roots=dataset_roots)
         metrics, samples = evaluate(model, loader(dataset, args, False), device, args.threshold, out / "predictions" / f"{name}_{split}" if args.save_predictions else None)
         samples.to_csv(out / f"samples_{name}_{split}.csv", index=False)
-        rows.append({"model": experiment_name, "architecture": args.model, "seed": args.seed, "train_dataset": args.train_dataset, "eval_dataset": name, "split": split, "best_epoch": best_epoch, "runtime_min": (time.time() - started) / 60, **model_stats(model._orig_mod if hasattr(model, "_orig_mod") else model), **metrics})
+        rows.append({"model": experiment_name, "architecture": args.model, "seed": args.seed, "train_dataset": args.train_dataset, "eval_dataset": name, "split": split, "best_epoch": best_epoch, "runtime_min": (time.time() - started) / 60, **complexity, **metrics})
     pd.DataFrame(rows).to_csv(out / "summary.csv", index=False)
     log("Final evaluation:\n" + pd.DataFrame(rows).to_string(index=False), log_path)
 
