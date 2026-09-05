@@ -14,6 +14,12 @@ from brss.models import ABLATIONS, get_model
 from brss.utils import git_revision, model_stats, seed_everything, write_json
 
 
+LOSS_ABLATIONS = {
+    "brss_no_boundary_loss": {"no_boundary_loss": True},
+    "brss_final_boundary_only": {"no_multiscale_boundary_loss": True},
+}
+
+
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train Boundary-Routed Selective State Space MambaSeg.")
     parser.add_argument("--data-root", default="./data", help="Fallback root for the original unified local data layout.")
@@ -23,7 +29,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--train-dataset", default="isic2018")
     parser.add_argument("--val-dataset", default="isic2018")
     parser.add_argument("--test-datasets", nargs="*", default=["isic2017", "PH2"])
-    parser.add_argument("--model", choices=sorted(ABLATIONS), default="brss_mamba")
+    parser.add_argument("--model", choices=sorted({*ABLATIONS, *LOSS_ABLATIONS}), default="brss_mamba")
     parser.add_argument("--experiment-name", default=None, help="Result label; defaults to --model.")
     parser.add_argument("--output-dir", default="./outputs/brss_mamba")
     parser.add_argument("--epochs", type=int, default=300)
@@ -57,6 +63,13 @@ def log(message: str, log_path: Path) -> None:
 
 def main() -> None:
     args = arguments()
+    if args.model in LOSS_ABLATIONS:
+        loss_ablation = args.model
+        if args.experiment_name is None:
+            args.experiment_name = loss_ablation
+        for option, value in LOSS_ABLATIONS[loss_ablation].items():
+            setattr(args, option, value)
+        args.model = "brss_mamba"
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     log_path = out / "train.log"

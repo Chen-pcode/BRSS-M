@@ -39,6 +39,14 @@ BRSS-MambaSeg/
 python train.py --epochs 2 --batch-size 16 --workers 2 --amp --output-dir /kaggle/working/smoke
 ```
 
+Loss-function ablations can be run directly with their experiment names. They
+use the full BRSS-Mamba architecture while disabling the indicated supervision:
+
+```bash
+python train.py --model brss_no_boundary_loss --amp --output-dir /kaggle/working/no_boundary_loss
+python train.py --model brss_final_boundary_only --amp --output-dir /kaggle/working/final_boundary_only
+```
+
 4. Run one proposed-model seed, inspect `config.json`, `history.csv`, and
    `summary.csv`, then run the controlled suite:
 
