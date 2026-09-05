@@ -6,6 +6,11 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+try:
+    from mamba_ssm import Mamba
+except ImportError:
+    Mamba = None
+
 
 def groups(channels: int) -> int:
     return next((value for value in (8, 4, 2, 1) if channels % value == 0), 1)
@@ -35,115 +40,93 @@ class DepthwiseResidual(nn.Module):
         return self.body(x) + self.skip(x)
 
 
-class SelectiveStateSpace2D(nn.Module):
-    """Reference 2-D selective SSM with input-dependent delta, B, and C.
+class AxialMamba2D(nn.Module):
+    """Two-dimensional adaptation of the official Mamba selective-scan block.
 
-    It is intentionally pure PyTorch for Kaggle portability. The recurrence is
-    a real selective state-space update, not cumulative summation; apply it only
-    at low resolutions where the reference implementation is practical.
+    Four independent official Mamba blocks scan row-major and column-major
+    token orders in both directions. This retains the fused selective scan from
+    mamba-ssm while removing the Python-level recurrence used by the prototype.
     """
 
-    def __init__(self, channels: int, use_selective_ssm: bool = True, use_local_path: bool = True, use_plain_scan: bool = False, use_boundary_router: bool = True):
+    def __init__(self, channels: int, use_local_path: bool = True, use_axial_scan: bool = True):
         super().__init__()
-        self.channels = channels
-        self.use_selective_ssm = use_selective_ssm
+        if Mamba is None:
+            raise ImportError(
+                "MambaSeg requires mamba-ssm. Install a CUDA-compatible build with "
+                "`pip install --no-build-isolation mamba-ssm causal-conv1d`."
+            )
         self.use_local_path = use_local_path
-        self.use_plain_scan = use_plain_scan
-        self.use_boundary_router = use_boundary_router
-        self.in_proj = nn.Conv2d(channels, channels * 2, 1, bias=False)
+        self.use_axial_scan = use_axial_scan
         self.local = ConvNormAct(channels, channels, 3, groups_=channels)
-        self.delta = nn.Conv2d(channels, channels, 1)
-        self.b_proj = nn.Conv2d(channels, channels, 1)
-        self.c_proj = nn.Conv2d(channels, channels, 1)
-        self.direction = nn.Conv2d(channels, 4, 1)
-        self.log_a = nn.Parameter(torch.zeros(channels))
-        self.d = nn.Parameter(torch.ones(channels))
+        self.norm = nn.LayerNorm(channels)
+        self.row_forward = Mamba(d_model=channels, d_state=16, d_conv=4, expand=2)
+        if use_axial_scan:
+            self.row_backward = Mamba(d_model=channels, d_state=16, d_conv=4, expand=2)
+            self.column_forward = Mamba(d_model=channels, d_state=16, d_conv=4, expand=2)
+            self.column_backward = Mamba(d_model=channels, d_state=16, d_conv=4, expand=2)
         self.out = ConvNormAct(channels, channels, 1)
 
-    def _scan(self, u: torch.Tensor, delta: torch.Tensor, b: torch.Tensor, c: torch.Tensor, reverse: bool) -> torch.Tensor:
-        if reverse:
-            u, delta, b, c = (torch.flip(value, (-1,)) for value in (u, delta, b, c))
-        state = torch.zeros_like(u[..., 0])
-        # Each recurrence step has tensors shaped [batch, channels]. Keeping
-        # A and D two-dimensional prevents batch/channel broadcast misalignment.
-        a = -F.softplus(self.log_a).view(1, -1)
-        outputs = []
-        for index in range(u.shape[-1]):
-            dt = delta[..., index]
-            state = torch.exp(a * dt) * state + dt * b[..., index] * u[..., index]
-            outputs.append(c[..., index] * state + self.d.view(1, -1) * u[..., index])
-        result = torch.stack(outputs, dim=-1)
-        return torch.flip(result, (-1,)) if reverse else result
+    @staticmethod
+    def _tokens(x: torch.Tensor) -> torch.Tensor:
+        return x.flatten(2).transpose(1, 2)
 
-    def forward(self, x: torch.Tensor, boundary_prior: torch.Tensor) -> torch.Tensor:
-        u, gate = self.in_proj(x).chunk(2, dim=1)
-        local = self.local(u) if self.use_local_path else u
-        if not self.use_selective_ssm:
-            return x + self.out(local * gate.sigmoid())
-        delta = F.softplus(self.delta(local)) + 1e-3
-        b, c = self.b_proj(local), self.c_proj(local)
-        if self.use_plain_scan:
-            horizontal = (torch.cumsum(local, 3) + torch.flip(torch.cumsum(torch.flip(local, (3,)), 3), (3,))) / local.shape[3]
-            vertical = (torch.cumsum(local, 2) + torch.flip(torch.cumsum(torch.flip(local, (2,)), 2), (2,))) / local.shape[2]
-            return x + self.out((horizontal + vertical) * gate.sigmoid())
-        row = local.flatten(2)
-        row_delta, row_b, row_c = (value.flatten(2) for value in (delta, b, c))
-        col = local.transpose(2, 3).flatten(2)
-        col_delta, col_b, col_c = (value.transpose(2, 3).flatten(2) for value in (delta, b, c))
-        col_shape = (local.shape[0], local.shape[1], local.shape[3], local.shape[2])
-        outputs = [
-            self._scan(row, row_delta, row_b, row_c, False).view_as(local),
-            self._scan(row, row_delta, row_b, row_c, True).view_as(local),
-            self._scan(col, col_delta, col_b, col_c, False).view(col_shape).transpose(2, 3),
-            self._scan(col, col_delta, col_b, col_c, True).view(col_shape).transpose(2, 3),
-        ]
-        directional_weight = self.direction(local).softmax(dim=1)
-        # Ambiguous contour regions retain more local evidence during global propagation.
-        uncertainty = 4 * boundary_prior.sigmoid() * (1 - boundary_prior.sigmoid()) if self.use_boundary_router else 0.0
-        mixed = sum(output * directional_weight[:, index : index + 1] for index, output in enumerate(outputs))
-        mixed = mixed * (1 - 0.5 * uncertainty) + local * uncertainty
-        return x + self.out(mixed * gate.sigmoid())
+    @staticmethod
+    def _feature(tokens: torch.Tensor, height: int, width: int) -> torch.Tensor:
+        return tokens.transpose(1, 2).reshape(tokens.shape[0], tokens.shape[2], height, width)
+
+    def _scan(self, block: nn.Module, tokens: torch.Tensor, reverse: bool = False) -> torch.Tensor:
+        if reverse:
+            tokens = torch.flip(tokens, (1,))
+        tokens = block(self.norm(tokens))
+        return torch.flip(tokens, (1,)) if reverse else tokens
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        local = self.local(x) if self.use_local_path else x
+        height, width = local.shape[-2:]
+        row_tokens = self._tokens(local)
+        if not self.use_axial_scan:
+            return x + self.out(self._feature(self._scan(self.row_forward, row_tokens), height, width))
+        column_tokens = self._tokens(local.transpose(2, 3))
+        row = self._scan(self.row_forward, row_tokens)
+        row = row + self._scan(self.row_backward, row_tokens, reverse=True)
+        column = self._scan(self.column_forward, column_tokens)
+        column = column + self._scan(self.column_backward, column_tokens, reverse=True)
+        column = self._feature(column, width, height).transpose(2, 3)
+        return x + self.out((self._feature(row, height, width) + column) * 0.25)
 
 
 class EncoderStage(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: int, use_ssm: bool, use_local_path: bool, use_plain_scan: bool, use_ssm_boundary_router: bool):
+    def __init__(self, in_channels: int, out_channels: int, stride: int, use_mamba: bool, use_local_path: bool, use_axial_scan: bool):
         super().__init__()
         self.conv = DepthwiseResidual(in_channels, out_channels, stride)
         self.prior = nn.Conv2d(out_channels, 1, 1)
-        self.ssm = SelectiveStateSpace2D(out_channels, use_ssm, use_local_path, use_plain_scan, use_ssm_boundary_router) if use_ssm else nn.Identity()
+        self.mamba = AxialMamba2D(out_channels, use_local_path, use_axial_scan) if use_mamba else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.conv(x)
         boundary_prior = self.prior(x)
-        return (self.ssm(x, boundary_prior) if isinstance(self.ssm, SelectiveStateSpace2D) else x), boundary_prior
+        return self.mamba(x), boundary_prior
 
 
 class BoundaryFusion(nn.Module):
-    def __init__(self, high_channels: int, skip_channels: int, out_channels: int, use_boundary_router: bool, use_cross_scale: bool):
+    def __init__(self, high_channels: int, skip_channels: int, out_channels: int):
         super().__init__()
-        self.use_boundary_router = use_boundary_router
-        self.use_cross_scale = use_cross_scale
         self.high = ConvNormAct(high_channels, out_channels, 1)
         self.skip = ConvNormAct(skip_channels, out_channels, 1)
         self.boundary = nn.Conv2d(out_channels * 2, 1, 1)
-        self.router = nn.Sequential(nn.Conv2d(1, out_channels, 1), nn.Sigmoid())
         self.mix = DepthwiseResidual(out_channels * 2, out_channels)
 
     def forward(self, high: torch.Tensor, skip: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         high = F.interpolate(self.high(high), size=skip.shape[-2:], mode="bilinear", align_corners=False)
         low = self.skip(skip)
-        boundary = self.boundary(torch.cat((high, low), dim=1))
-        if self.use_cross_scale:
-            high = high + low.mean((2, 3), keepdim=True)
-        if self.use_boundary_router:
-            low = low * (1 + self.router(boundary))
-        return self.mix(torch.cat((high, low), dim=1)), boundary
+        fusion = torch.cat((high, low), dim=1)
+        return self.mix(fusion), self.boundary(fusion)
 
 
 class BRSSMambaSeg(nn.Module):
-    """Six-resolution CNN-SSM model with boundary-routed decoder fusion."""
+    """Six-resolution local-global skin lesion segmenter using official Mamba."""
 
-    def __init__(self, base: int = 16, stages: int = 6, use_ssm: bool = True, use_ssm_boundary_router: bool = True, use_decoder_boundary_router: bool = True, use_local_path: bool = True, use_cross_scale: bool = True, use_plain_scan: bool = False):
+    def __init__(self, base: int = 16, stages: int = 6, use_mamba: bool = True, use_local_path: bool = True, use_axial_scan: bool = True):
         super().__init__()
         if stages not in {4, 5, 6}:
             raise ValueError("stages must be 4, 5 or 6")
@@ -151,15 +134,13 @@ class BRSSMambaSeg(nn.Module):
         widths = {4: [base, base, base * 2, base * 4], 5: [base, base, base * 2, base * 3, base * 4], 6: [base, base, base * 2, base * 3, base * 4, base * 6]}[stages]
         self.stem = ConvNormAct(3, widths[0])
         self.encoder = nn.ModuleList()
-        # Keep the reference SSM at or below 16x16 for 256x256 inputs. The
-        # stage index is tied to the spatial downsampling, not to stage count.
+        # Mamba is applied only at 16x16 and smaller features for 256x256 input.
         ssm_start_index = 4
         for index in range(1, stages):
-            # At 256x256 this corresponds to 16x16 and smaller feature maps.
-            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_ssm and index >= ssm_start_index, use_local_path, use_plain_scan, use_ssm_boundary_router))
+            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_mamba and index >= ssm_start_index, use_local_path, use_axial_scan))
         self.decoder = nn.ModuleList()
         for index in range(stages - 1, 0, -1):
-            self.decoder.append(BoundaryFusion(widths[index], widths[index - 1], widths[index - 1], use_decoder_boundary_router, use_cross_scale))
+            self.decoder.append(BoundaryFusion(widths[index], widths[index - 1], widths[index - 1]))
         self.output = nn.Conv2d(widths[0], 1, 1)
         self.auxiliary = nn.ModuleList([nn.Conv2d(widths[1], 1, 1), nn.Conv2d(widths[2], 1, 1)])
 
@@ -185,16 +166,10 @@ class BRSSMambaSeg(nn.Module):
 
 ABLATIONS = {
     "brss_mamba": {},
-    "brss_4stage": {"stages": 4},
-    "brss_4stage_matched": {"stages": 4, "base": 24},
+    "brss_raster_mamba": {"use_axial_scan": False},
+    "brss_no_mamba": {"use_mamba": False},
     "brss_5stage": {"stages": 5},
-    "brss_no_ssm": {"use_ssm": False},
-    "brss_plain_scan": {"use_plain_scan": True},
-    "brss_no_boundary_router": {"use_ssm_boundary_router": False, "use_decoder_boundary_router": False},
-    "brss_ssm_router_only": {"use_decoder_boundary_router": False},
-    "brss_decoder_router_only": {"use_ssm_boundary_router": False},
     "brss_no_local_path": {"use_local_path": False},
-    "brss_no_cross_scale": {"use_cross_scale": False},
 }
 
 

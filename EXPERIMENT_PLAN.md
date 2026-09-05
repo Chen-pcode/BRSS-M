@@ -2,10 +2,11 @@
 
 ## Hypothesis
 
-At low resolution, a selective state-space block can capture lesion-scale
-context without high-resolution attention cost. Its global propagation should
-be conditioned by boundary uncertainty so that ambiguous contours retain local
-evidence instead of spreading artifacts such as hair and illumination changes.
+At low resolution, official Mamba selective state-space blocks can capture
+lesion-scale context without high-resolution attention cost. Bidirectional
+axial tokenization should preserve two-dimensional context, while a local
+convolutional path retains contour and texture evidence. Multi-scale boundary
+supervision should improve final contour generalization on an external domain.
 
 ## Fixed Protocol
 
@@ -23,20 +24,14 @@ evidence instead of spreading artifacts such as hair and illumination changes.
 | Variant | Tests | Expected evidence |
 | --- | --- | --- |
 | BRSS-MambaSeg | Full six-level model | Reference result |
-| 4-stage, parameter-matched | Remove deep 16/8 levels while increasing width | Value of six-resolution hierarchy |
-| 5-stage | Intermediate depth control | Depth-response curve |
-| w/o selective SSM | CNN only at deep stages | Value of state-space dynamics |
-| Plain cumulative scan | Replace SSM with fixed scan | Dynamic SSM vs BLMNet-style aggregation |
-| No boundary router | Remove routing from SSM and decoder | Overall routing contribution |
-| SSM router only | Keep routing only during state-space propagation | State-update contribution |
-| Decoder router only | Keep routing only during skip fusion | Decoder-only control |
+| Raster Mamba | Use a single row-major Mamba scan | Value of bidirectional axial tokenization |
+| w/o Mamba | CNN-only encoder at the deep stages | Value of Mamba global modeling |
+| 5-stage | Remove the 8 x 8 level | Value of the deepest level |
 | w/o local path | Remove depthwise local feature path | Local-global complementarity |
-| w/o cross-scale fusion | Remove global skip context | Cross-scale fusion contribution |
 | Final boundary supervision only | Remove deep boundary supervision | Multi-scale structural supervision |
 | w/o boundary loss | Keep architecture, remove all boundary loss | Objective-level contribution |
 
 Do not claim a component improves performance unless its three-seed mean and
-paired per-image Dice comparison are consistent. For the routing claim, report
-both segmentation metrics and the Dice/IoU of each supervised boundary scale.
-All models must use the same split manifests and protocol-specific checkpoint
-selection.
+paired per-image Dice comparison are consistent. Report both segmentation and
+boundary metrics for the boundary-supervision claim. All models must use the
+same split manifests and protocol-specific checkpoint selection.

@@ -1,17 +1,15 @@
 # BRSS-MambaSeg
 
 BRSS-MambaSeg is an isolated, Kaggle-ready research project for skin lesion
-segmentation. It evaluates a six-resolution CNN-selective-state-space network
-with boundary-uncertainty-routed decoder fusion.
+segmentation. It uses official `mamba-ssm` Mamba blocks to build global context
+at low-resolution encoder features, with a local convolutional path and
+multi-scale boundary supervision.
 
-The state-space block is a portable PyTorch reference implementation with
-input-dependent delta, B and C parameters. It is enabled only from the layer
-that produces a 16 x 16 feature map onward for 256 x 256 inputs. Therefore,
-the six-stage model uses 16 x 16 and 8 x 8 SSM blocks, the five-stage model
-uses only 16 x 16, and the four-stage model uses none. This fixed-resolution
-rule keeps depth ablations computationally comparable and viable within a
-Kaggle GPU session. It is not described as VMamba or as an official Mamba
-kernel. This distinction is deliberate and should be retained in any paper.
+`AxialMamba2D` runs four official Mamba blocks over row-major and column-major
+tokens in both directions. It is applied only at 16 x 16 and 8 x 8 features
+for 256 x 256 inputs. The model is therefore Mamba-based, but it is not a
+VMamba/SS2D reproduction. The prior boundary routers and cross-scale mean
+injection were removed because their ablations did not show consistent gains.
 
 ## Layout
 
@@ -32,7 +30,11 @@ BRSS-MambaSeg/
    `/kaggle/input/datasets/zichengdoctor/isic2018`, and
    `/kaggle/input/datasets/zichengdoctor/ph2dataset`.
 2. Set the working directory to the uploaded code directory and install the
-   listed packages only if the Kaggle image does not already provide them.
+   dependencies. `mamba-ssm` needs a CUDA-compatible binary or compiler:
+
+```bash
+pip install --no-build-isolation mamba-ssm causal-conv1d
+```
 3. Run a smoke test before a full experiment:
 
 ```bash
@@ -54,7 +56,7 @@ python train.py --model brss_final_boundary_only --amp --output-dir /kaggle/work
 python run_ablations.py --amp --output-root /kaggle/working/ablation --skip-completed
 ```
 
-The core suite is 36 training jobs for ISIC2018 (12 variants x 3 seeds). Run
+The core suite is 21 training jobs for ISIC2018 (7 variants x 3 seeds). Run
 the full suite only after the smoke test and one single-seed full-model run.
 Repeat it on ISIC2017 with:
 

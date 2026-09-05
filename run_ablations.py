@@ -7,15 +7,10 @@ from pathlib import Path
 
 MODELS = [
     "brss_mamba",
-    "brss_4stage_matched",
+    "brss_raster_mamba",
+    "brss_no_mamba",
     "brss_5stage",
-    "brss_no_ssm",
-    "brss_plain_scan",
-    "brss_no_boundary_router",
-    "brss_ssm_router_only",
-    "brss_decoder_router_only",
     "brss_no_local_path",
-    "brss_no_cross_scale",
     "brss_no_boundary_loss",
     "brss_final_boundary_only",
 ]
