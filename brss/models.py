@@ -40,18 +40,26 @@ class DepthwiseResidual(nn.Module):
         return self.body(x) + self.skip(x)
 
 
-class RasterMamba2D(nn.Module):
-    """Low-resolution row-major adaptation of the official Mamba block."""
+class BoundaryCompressedRasterMamba(nn.Module):
+    """Boundary-conditioned, compressed, shared row/column Mamba block."""
 
-    def __init__(self, channels: int):
+    def __init__(self, channels: int, compression: bool = True, dual_axis: bool = True, boundary_modulation: bool = True):
         super().__init__()
         if Mamba is None:
             raise ImportError(
                 "MambaSeg requires mamba-ssm. Install a CUDA-compatible build with "
                 "`pip install --no-build-isolation mamba-ssm causal-conv1d`."
             )
-        self.norm = nn.LayerNorm(channels)
-        self.mamba = Mamba(d_model=channels, d_state=16, d_conv=4, expand=2)
+        self.compression = compression
+        self.dual_axis = dual_axis
+        self.boundary_modulation = boundary_modulation
+        inner_channels = max(8, channels // 2) if compression else channels
+        self.reduce = nn.Conv2d(channels, inner_channels, 1) if compression else nn.Identity()
+        self.expand = nn.Conv2d(inner_channels, channels, 1) if compression else nn.Identity()
+        self.boundary_gate = nn.Conv2d(1, 1, 1) if boundary_modulation else None
+        self.norm = nn.LayerNorm(inner_channels)
+        self.mamba = Mamba(d_model=inner_channels, d_state=16, d_conv=4, expand=2)
+        self.axis_fuse = nn.Conv2d(inner_channels * (2 if dual_axis else 1), inner_channels, 1) if dual_axis else nn.Identity()
         self.out = ConvNormAct(channels, channels, 1)
 
     @staticmethod
@@ -62,24 +70,38 @@ class RasterMamba2D(nn.Module):
     def _feature(tokens: torch.Tensor, height: int, width: int) -> torch.Tensor:
         return tokens.transpose(1, 2).reshape(tokens.shape[0], tokens.shape[2], height, width)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, boundary_prior: torch.Tensor | None = None) -> torch.Tensor:
         height, width = x.shape[-2:]
-        tokens = self._tokens(x)
-        output = self.mamba(self.norm(tokens))
-        return x + self.out(self._feature(output, height, width))
+        reduced = self.reduce(x)
+        if self.boundary_gate is not None and boundary_prior is not None:
+            # High uncertainty keeps more local signal and weakens global input.
+            probability = self.boundary_gate(boundary_prior).sigmoid()
+            uncertainty = 4 * probability * (1 - probability)
+            reduced = reduced * (1 - 0.5 * uncertainty)
+        row = self.mamba(self.norm(self._tokens(reduced)))
+        row = self._feature(row, height, width)
+        if self.dual_axis:
+            column_tokens = self._tokens(reduced.transpose(2, 3))
+            column = self.mamba(self.norm(column_tokens))
+            column = self._feature(column, width, height).transpose(2, 3)
+            reduced = self.axis_fuse(torch.cat((row, column), dim=1))
+        else:
+            reduced = row
+        return x + self.out(self.expand(reduced))
 
 
 class EncoderStage(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: int, use_mamba: bool):
+    def __init__(self, in_channels: int, out_channels: int, stride: int, use_mamba: bool, compression: bool, dual_axis: bool, boundary_modulation: bool):
         super().__init__()
         self.conv = DepthwiseResidual(in_channels, out_channels, stride)
         self.prior = nn.Conv2d(out_channels, 1, 1)
-        self.mamba = RasterMamba2D(out_channels) if use_mamba else nn.Identity()
+        self.mamba = BoundaryCompressedRasterMamba(out_channels, compression, dual_axis, boundary_modulation) if use_mamba else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.conv(x)
         boundary_prior = self.prior(x)
-        return self.mamba(x), boundary_prior
+        feature = self.mamba(x, boundary_prior) if isinstance(self.mamba, BoundaryCompressedRasterMamba) else self.mamba(x)
+        return feature, boundary_prior
 
 
 class BoundaryFusion(nn.Module):
@@ -100,7 +122,7 @@ class BoundaryFusion(nn.Module):
 class BRSSMambaSeg(nn.Module):
     """Six-resolution local-global skin lesion segmenter using official Mamba."""
 
-    def __init__(self, base: int = 16, stages: int = 6, use_mamba: bool = True):
+    def __init__(self, base: int = 16, stages: int = 6, use_mamba: bool = True, compression: bool = True, dual_axis: bool = True, boundary_modulation: bool = True):
         super().__init__()
         if stages not in {4, 5, 6}:
             raise ValueError("stages must be 4, 5 or 6")
@@ -108,10 +130,10 @@ class BRSSMambaSeg(nn.Module):
         widths = {4: [base, base, base * 2, base * 4], 5: [base, base, base * 2, base * 3, base * 4], 6: [base, base, base * 2, base * 3, base * 4, base * 6]}[stages]
         self.stem = ConvNormAct(3, widths[0])
         self.encoder = nn.ModuleList()
-        # Mamba is applied only at 16x16 and smaller features for 256x256 input.
-        ssm_start_index = 4
+        # For a 256x256 input, index 4 produces a 16x16 feature map. Keep one
+        # Mamba bottleneck there; the 8x8 stage remains a CNN stage.
         for index in range(1, stages):
-            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_mamba and index >= ssm_start_index))
+            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_mamba and index == 4, compression, dual_axis, boundary_modulation))
         self.decoder = nn.ModuleList()
         for index in range(stages - 1, 0, -1):
             self.decoder.append(BoundaryFusion(widths[index], widths[index - 1], widths[index - 1]))
@@ -139,10 +161,12 @@ class BRSSMambaSeg(nn.Module):
 
 
 ABLATIONS = {
-    "brss_mamba": {},
-    "brss_raster_mamba": {},
+    "brss_bcr_mamba": {},
+    "brss_raster_mamba": {"dual_axis": False, "boundary_modulation": False},
     "brss_no_mamba": {"use_mamba": False},
-    "brss_5stage": {"stages": 5},
+    "brss_no_compression": {"compression": False},
+    "brss_single_axis": {"dual_axis": False},
+    "brss_no_boundary_modulation": {"boundary_modulation": False},
 }
 
 

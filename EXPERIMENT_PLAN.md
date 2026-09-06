@@ -23,11 +23,17 @@ external domain.
 
 | Variant | Tests | Expected evidence |
 | --- | --- | --- |
-| BRSS-Raster-Mamba | Full six-level model with single row-major Mamba scan | Reference result |
+| BRSS-BCR-Mamba | Full six-level model with compressed shared row/column Mamba at 16 x 16 | Reference result |
 | w/o Mamba | CNN-only encoder at the deep stages | Value of Mamba global modeling |
-| 5-stage | Remove the 8 x 8 level | Value of the deepest level |
+| w/o compression | Keep full Mamba channel width | Value of channel compression |
+| single-axis Mamba | Use row-major Mamba only | Value of shared row/column modeling |
+| w/o boundary modulation | Remove boundary-conditioned input modulation | Value of boundary-aware propagation |
 | Final boundary supervision only | Remove deep boundary supervision | Multi-scale structural supervision |
 | w/o boundary loss | Keep architecture, remove all boundary loss | Objective-level contribution |
+
+The legacy `brss_raster_mamba` name is retained only for compatibility with
+older checkpoints and refers to a single-axis, non-boundary-modulated model;
+it is not part of the new primary ablation table.
 
 Do not claim a component improves performance unless its three-seed mean and
 paired per-image Dice comparison are consistent. Report both segmentation and

@@ -4,11 +4,11 @@ BRSS-MambaSeg is an isolated, Kaggle-ready research project for skin lesion
 segmentation. It uses official `mamba-ssm` Mamba blocks to build global context
 at low-resolution encoder features, with multi-scale boundary supervision.
 
-`RasterMamba2D` applies one official Mamba block to row-major tokens. It is
-applied only at 16 x 16 and 8 x 8 features for 256 x 256 inputs. The model is
-therefore Mamba-based, but it is not a VMamba/SS2D reproduction. The prior
-boundary routers, cross-scale mean injection, four-direction axial branch and
-local SSM path were removed from the final design.
+`BoundaryCompressedRasterMamba` applies one shared official Mamba block to
+row-major and column-major tokens at the 16 x 16 feature level. Channels are
+compressed before Mamba, and a learned boundary prior reduces global input
+strength in uncertain regions. The model is therefore Mamba-based, but it is
+not a VMamba/SS2D reproduction.
 
 ## Layout
 
@@ -37,7 +37,7 @@ pip install --no-build-isolation mamba-ssm causal-conv1d
 3. Run a smoke test before a full experiment:
 
 ```bash
-python train.py --model brss_raster_mamba --epochs 2 --batch-size 16 --workers 2 --amp --output-dir /kaggle/working/smoke
+python train.py --model brss_bcr_mamba --epochs 2 --batch-size 16 --workers 2 --amp --output-dir /kaggle/working/smoke
 ```
 
 Loss-function ablations can be run directly with their experiment names. They
@@ -55,7 +55,9 @@ python train.py --model brss_final_boundary_only --amp --output-dir /kaggle/work
 python run_ablations.py --amp --output-root /kaggle/working/ablation --skip-completed
 ```
 
-The core suite is 15 training jobs for ISIC2018 (5 variants x 3 seeds). Run
+The core suite is 21 training jobs for ISIC2018 (7 variants x 3 seeds): the
+full model, no-Mamba, no-compression, single-axis, no-boundary-modulation,
+no-boundary-loss and final-boundary-only variants. Run
 the full suite only after the smoke test and one single-seed full-model run.
 Repeat it on ISIC2017 with:
 
