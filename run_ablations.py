@@ -6,11 +6,9 @@ import sys
 from pathlib import Path
 
 MODELS = [
-    "brss_mamba",
     "brss_raster_mamba",
     "brss_no_mamba",
     "brss_5stage",
-    "brss_no_local_path",
     "brss_no_boundary_loss",
     "brss_final_boundary_only",
 ]
@@ -44,7 +42,7 @@ def main() -> None:
     root = Path(args.output_root)
     for seed in args.seeds:
         for model in args.models:
-            actual_model = "brss_mamba" if model in {"brss_no_boundary_loss", "brss_final_boundary_only"} else model
+            actual_model = "brss_raster_mamba" if model in {"brss_no_boundary_loss", "brss_final_boundary_only"} else model
             output_dir = root / f"{model}_seed{seed}"
             if args.skip_completed and (output_dir / "summary.csv").exists():
                 print(f"Skipping completed run: {output_dir}")
