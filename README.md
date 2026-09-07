@@ -4,11 +4,11 @@ BRSS-MambaSeg is an isolated, Kaggle-ready research project for skin lesion
 segmentation. It uses official `mamba-ssm` Mamba blocks to build global context
 at low-resolution encoder features, with multi-scale boundary supervision.
 
-`BoundaryCompressedRasterMamba` applies one shared official Mamba block to
-row-major and column-major tokens at the 16 x 16 feature level. Channels are
-compressed before Mamba, and a learned boundary prior reduces global input
-strength in uncertain regions. The model is therefore Mamba-based, but it is
-not a VMamba/SS2D reproduction.
+`HighResolutionGroupedMamba` applies one shared official Mamba block to
+row-major and column-major sequences at the 32 x 32 feature level. Channels
+are compressed and split into two groups before the Mamba scan, with groups
+folded into the batch dimension to share all Mamba parameters. The model is
+therefore Mamba-based, but it is not a VMamba/SS2D reproduction.
 
 ## Layout
 
@@ -37,7 +37,7 @@ pip install --no-build-isolation mamba-ssm causal-conv1d
 3. Run a smoke test before a full experiment:
 
 ```bash
-python train.py --model brss_bcr_mamba --epochs 2 --batch-size 16 --workers 2 --amp --output-dir /kaggle/working/smoke
+python train.py --model brss_hgm_mamba --epochs 2 --batch-size 16 --workers 2 --amp --output-dir /kaggle/working/smoke
 ```
 
 Loss-function ablations can be run directly with their experiment names. They
@@ -55,9 +55,9 @@ python train.py --model brss_final_boundary_only --amp --output-dir /kaggle/work
 python run_ablations.py --amp --output-root /kaggle/working/ablation --skip-completed
 ```
 
-The core suite is 21 training jobs for ISIC2018 (7 variants x 3 seeds): the
-full model, no-Mamba, no-compression, single-axis, no-boundary-modulation,
-no-boundary-loss and final-boundary-only variants. Run
+The core suite is 24 training jobs for ISIC2018 (8 variants x 3 seeds): the
+full model, plain Raster Mamba, no-Mamba, no-compression, no-grouping,
+single-axis, no-boundary-loss and final-boundary-only variants. Run
 the full suite only after the smoke test and one single-seed full-model run.
 Repeat it on ISIC2017 with:
 

@@ -29,9 +29,9 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--train-dataset", default="isic2018")
     parser.add_argument("--val-dataset", default="isic2018")
     parser.add_argument("--test-datasets", nargs="*", default=["isic2017", "PH2"])
-    parser.add_argument("--model", choices=sorted({*ABLATIONS, *LOSS_ABLATIONS}), default="brss_bcr_mamba")
+    parser.add_argument("--model", choices=sorted({*ABLATIONS, *LOSS_ABLATIONS}), default="brss_hgm_mamba")
     parser.add_argument("--experiment-name", default=None, help="Result label; defaults to --model.")
-    parser.add_argument("--output-dir", default="./outputs/brss_bcr_mamba")
+    parser.add_argument("--output-dir", default="./outputs/brss_hgm_mamba")
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--patience", type=int, default=60)
     parser.add_argument("--batch-size", type=int, default=16)
@@ -69,7 +69,7 @@ def main() -> None:
             args.experiment_name = loss_ablation
         for option, value in LOSS_ABLATIONS[loss_ablation].items():
             setattr(args, option, value)
-        args.model = "brss_bcr_mamba"
+        args.model = "brss_hgm_mamba"
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     log_path = out / "train.log"

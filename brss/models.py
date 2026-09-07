@@ -40,10 +40,10 @@ class DepthwiseResidual(nn.Module):
         return self.body(x) + self.skip(x)
 
 
-class BoundaryCompressedRasterMamba(nn.Module):
-    """Boundary-conditioned, compressed, shared row/column Mamba block."""
+class HighResolutionGroupedMamba(nn.Module):
+    """Grouped shared Mamba for long 2-D sequences at 32x32 resolution."""
 
-    def __init__(self, channels: int, compression: bool = True, dual_axis: bool = True, boundary_modulation: bool = True):
+    def __init__(self, channels: int, compression: bool = True, dual_axis: bool = True, grouped: bool = True):
         super().__init__()
         if Mamba is None:
             raise ImportError(
@@ -52,13 +52,22 @@ class BoundaryCompressedRasterMamba(nn.Module):
             )
         self.compression = compression
         self.dual_axis = dual_axis
-        self.boundary_modulation = boundary_modulation
-        inner_channels = max(8, channels // 2) if compression else channels
+        self.grouped = grouped
+        compressed_channels = max(8, channels // 2) if compression else channels
+        if grouped and compressed_channels % 2:
+            compressed_channels += 1
+        inner_channels = compressed_channels
+        group_count = 2 if grouped else 1
+        if inner_channels % group_count:
+            raise ValueError("Mamba channels must be divisible by the group count")
+        group_channels = inner_channels // group_count
+        self.group_count = group_count
         self.reduce = nn.Conv2d(channels, inner_channels, 1) if compression else nn.Identity()
         self.expand = nn.Conv2d(inner_channels, channels, 1) if compression else nn.Identity()
-        self.boundary_gate = nn.Conv2d(1, 1, 1) if boundary_modulation else None
-        self.norm = nn.LayerNorm(inner_channels)
-        self.mamba = Mamba(d_model=inner_channels, d_state=16, d_conv=4, expand=2)
+        self.norm = nn.LayerNorm(group_channels)
+        # One shared Mamba is applied to each channel group by folding groups
+        # into the batch dimension. This keeps the parameter count constant.
+        self.mamba = Mamba(d_model=group_channels, d_state=16, d_conv=4, expand=2)
         self.axis_fuse = nn.Conv2d(inner_channels * (2 if dual_axis else 1), inner_channels, 1) if dual_axis else nn.Identity()
         self.out = ConvNormAct(channels, channels, 1)
 
@@ -70,20 +79,20 @@ class BoundaryCompressedRasterMamba(nn.Module):
     def _feature(tokens: torch.Tensor, height: int, width: int) -> torch.Tensor:
         return tokens.transpose(1, 2).reshape(tokens.shape[0], tokens.shape[2], height, width)
 
-    def forward(self, x: torch.Tensor, boundary_prior: torch.Tensor | None = None) -> torch.Tensor:
+    def _group_scan(self, feature: torch.Tensor, height: int, width: int) -> torch.Tensor:
+        batch, channels = feature.shape[:2]
+        group_channels = channels // self.group_count
+        grouped = feature.reshape(batch * self.group_count, group_channels, height, width)
+        tokens = self._tokens(grouped)
+        output = self.mamba(self.norm(tokens))
+        return self._feature(output, height, width).reshape(batch, channels, height, width)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         height, width = x.shape[-2:]
         reduced = self.reduce(x)
-        if self.boundary_gate is not None and boundary_prior is not None:
-            # High uncertainty keeps more local signal and weakens global input.
-            probability = self.boundary_gate(boundary_prior).sigmoid()
-            uncertainty = 4 * probability * (1 - probability)
-            reduced = reduced * (1 - 0.5 * uncertainty)
-        row = self.mamba(self.norm(self._tokens(reduced)))
-        row = self._feature(row, height, width)
+        row = self._group_scan(reduced, height, width)
         if self.dual_axis:
-            column_tokens = self._tokens(reduced.transpose(2, 3))
-            column = self.mamba(self.norm(column_tokens))
-            column = self._feature(column, width, height).transpose(2, 3)
+            column = self._group_scan(reduced.transpose(2, 3), width, height).transpose(2, 3)
             reduced = self.axis_fuse(torch.cat((row, column), dim=1))
         else:
             reduced = row
@@ -91,16 +100,16 @@ class BoundaryCompressedRasterMamba(nn.Module):
 
 
 class EncoderStage(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: int, use_mamba: bool, compression: bool, dual_axis: bool, boundary_modulation: bool):
+    def __init__(self, in_channels: int, out_channels: int, stride: int, use_mamba: bool, compression: bool, dual_axis: bool, grouped: bool):
         super().__init__()
         self.conv = DepthwiseResidual(in_channels, out_channels, stride)
         self.prior = nn.Conv2d(out_channels, 1, 1)
-        self.mamba = BoundaryCompressedRasterMamba(out_channels, compression, dual_axis, boundary_modulation) if use_mamba else nn.Identity()
+        self.mamba = HighResolutionGroupedMamba(out_channels, compression, dual_axis, grouped) if use_mamba else nn.Identity()
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         x = self.conv(x)
         boundary_prior = self.prior(x)
-        feature = self.mamba(x, boundary_prior) if isinstance(self.mamba, BoundaryCompressedRasterMamba) else self.mamba(x)
+        feature = self.mamba(x) if isinstance(self.mamba, HighResolutionGroupedMamba) else self.mamba(x)
         return feature, boundary_prior
 
 
@@ -122,7 +131,7 @@ class BoundaryFusion(nn.Module):
 class BRSSMambaSeg(nn.Module):
     """Six-resolution local-global skin lesion segmenter using official Mamba."""
 
-    def __init__(self, base: int = 16, stages: int = 6, use_mamba: bool = True, compression: bool = True, dual_axis: bool = True, boundary_modulation: bool = True):
+    def __init__(self, base: int = 16, stages: int = 6, use_mamba: bool = True, compression: bool = True, dual_axis: bool = True, grouped: bool = True):
         super().__init__()
         if stages not in {4, 5, 6}:
             raise ValueError("stages must be 4, 5 or 6")
@@ -130,10 +139,10 @@ class BRSSMambaSeg(nn.Module):
         widths = {4: [base, base, base * 2, base * 4], 5: [base, base, base * 2, base * 3, base * 4], 6: [base, base, base * 2, base * 3, base * 4, base * 6]}[stages]
         self.stem = ConvNormAct(3, widths[0])
         self.encoder = nn.ModuleList()
-        # For a 256x256 input, index 4 produces a 16x16 feature map. Keep one
-        # Mamba bottleneck there; the 8x8 stage remains a CNN stage.
+        # For a 256x256 input, index 3 produces a 32x32 feature map (1024
+        # tokens), which is long enough to expose Mamba's sequence advantage.
         for index in range(1, stages):
-            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_mamba and index == 4, compression, dual_axis, boundary_modulation))
+            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_mamba and index == 3, compression, dual_axis, grouped))
         self.decoder = nn.ModuleList()
         for index in range(stages - 1, 0, -1):
             self.decoder.append(BoundaryFusion(widths[index], widths[index - 1], widths[index - 1]))
@@ -161,12 +170,12 @@ class BRSSMambaSeg(nn.Module):
 
 
 ABLATIONS = {
-    "brss_bcr_mamba": {},
-    "brss_raster_mamba": {"dual_axis": False, "boundary_modulation": False},
+    "brss_hgm_mamba": {},
+    "brss_raster_mamba": {"dual_axis": False, "grouped": False, "compression": False},
     "brss_no_mamba": {"use_mamba": False},
     "brss_no_compression": {"compression": False},
+    "brss_no_grouping": {"grouped": False},
     "brss_single_axis": {"dual_axis": False},
-    "brss_no_boundary_modulation": {"boundary_modulation": False},
 }
 
 

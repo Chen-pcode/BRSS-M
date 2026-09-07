@@ -2,11 +2,12 @@
 
 ## Hypothesis
 
-At low resolution, an official Mamba selective state-space block can capture
-lesion-scale context without high-resolution attention cost. A row-major Raster
-sequence provides a lightweight global context path, while multi-scale
-boundary supervision should improve final contour generalization on an
-external domain.
+Most lightweight skin-lesion Mamba networks apply Mamba only at 16 x 16 or
+8 x 8 features, yielding short sequences that underuse its linear long-range
+modeling advantage. Direct high-resolution Mamba is expensive because Mamba
+cost increases with channel width. We therefore use grouped, channel-compressed
+official Mamba at 32 x 32 features (1024 tokens), retaining long-range context
+with low-dimensional shared state-space scans.
 
 ## Fixed Protocol
 
@@ -23,17 +24,15 @@ external domain.
 
 | Variant | Tests | Expected evidence |
 | --- | --- | --- |
-| BRSS-BCR-Mamba | Full six-level model with compressed shared row/column Mamba at 16 x 16 | Reference result |
+| HGM-Mamba | Full six-level model with compressed, grouped shared row/column Mamba at 32 x 32 | Reference result |
+| Plain Raster Mamba | One uncompressed row-major Mamba scan at 32 x 32 | High-resolution Mamba baseline |
 | w/o Mamba | CNN-only encoder at the deep stages | Value of Mamba global modeling |
 | w/o compression | Keep full Mamba channel width | Value of channel compression |
+| w/o grouping | Keep compressed channels in one Mamba sequence | Value of grouped shared scanning |
 | single-axis Mamba | Use row-major Mamba only | Value of shared row/column modeling |
-| w/o boundary modulation | Remove boundary-conditioned input modulation | Value of boundary-aware propagation |
 | Final boundary supervision only | Remove deep boundary supervision | Multi-scale structural supervision |
 | w/o boundary loss | Keep architecture, remove all boundary loss | Objective-level contribution |
 
-The legacy `brss_raster_mamba` name is retained only for compatibility with
-older checkpoints and refers to a single-axis, non-boundary-modulated model;
-it is not part of the new primary ablation table.
 
 Do not claim a component improves performance unless its three-seed mean and
 paired per-image Dice comparison are consistent. Report both segmentation and
