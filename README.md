@@ -55,9 +55,10 @@ python train.py --model brss_final_boundary_only --amp --output-dir /kaggle/work
 python run_ablations.py --amp --output-root /kaggle/working/ablation --skip-completed
 ```
 
-The core suite is 24 training jobs for ISIC2018 (8 variants x 3 seeds): the
-full model, plain Raster Mamba, no-Mamba, no-compression, no-grouping,
-single-axis, no-boundary-loss and final-boundary-only variants. Run
+The core suite is 33 training jobs for ISIC2018 (11 variants x 3 seeds): four
+Mamba-placement variants (32 x 32; 32 x 32 + 16 x 16; 32 x 32 + 16 x 16 + 8 x
+8; and 16 x 16 only), plain Raster Mamba, no-Mamba, no-compression,
+no-grouping, single-axis, no-boundary-loss and final-boundary-only variants. Run
 the full suite only after the smoke test and one single-seed full-model run.
 Repeat it on ISIC2017 with:
 

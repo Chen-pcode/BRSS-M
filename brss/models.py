@@ -131,18 +131,31 @@ class BoundaryFusion(nn.Module):
 class BRSSMambaSeg(nn.Module):
     """Six-resolution local-global skin lesion segmenter using official Mamba."""
 
-    def __init__(self, base: int = 16, stages: int = 6, use_mamba: bool = True, compression: bool = True, dual_axis: bool = True, grouped: bool = True):
+    def __init__(
+        self,
+        base: int = 16,
+        stages: int = 6,
+        use_mamba: bool = True,
+        compression: bool = True,
+        dual_axis: bool = True,
+        grouped: bool = True,
+        mamba_indices: tuple[int, ...] = (3,),
+    ):
         super().__init__()
         if stages not in {4, 5, 6}:
             raise ValueError("stages must be 4, 5 or 6")
+        invalid_indices = set(mamba_indices) - set(range(1, stages))
+        if invalid_indices:
+            raise ValueError(f"Mamba encoder indices are outside this architecture: {sorted(invalid_indices)}")
         self.stages = stages
         widths = {4: [base, base, base * 2, base * 4], 5: [base, base, base * 2, base * 3, base * 4], 6: [base, base, base * 2, base * 3, base * 4, base * 6]}[stages]
         self.stem = ConvNormAct(3, widths[0])
         self.encoder = nn.ModuleList()
-        # For a 256x256 input, index 3 produces a 32x32 feature map (1024
-        # tokens), which is long enough to expose Mamba's sequence advantage.
+        # With a 256x256 input, encoder indices 3, 4 and 5 correspond to
+        # 32x32, 16x16 and 8x8 features. The stage-location ablations keep
+        # every other HGM component fixed and vary only this placement.
         for index in range(1, stages):
-            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_mamba and index == 3, compression, dual_axis, grouped))
+            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_mamba and index in mamba_indices, compression, dual_axis, grouped))
         self.decoder = nn.ModuleList()
         for index in range(stages - 1, 0, -1):
             self.decoder.append(BoundaryFusion(widths[index], widths[index - 1], widths[index - 1]))
@@ -170,7 +183,12 @@ class BRSSMambaSeg(nn.Module):
 
 
 ABLATIONS = {
+    # Mamba placement ablations. All use the same compressed, two-group,
+    # row/column HGM block; only the encoder resolution changes.
     "brss_hgm_mamba": {},
+    "brss_s3_s4_mamba": {"mamba_indices": (3, 4)},
+    "brss_s3_s4_s5_mamba": {"mamba_indices": (3, 4, 5)},
+    "brss_s4_mamba": {"mamba_indices": (4,)},
     "brss_raster_mamba": {"dual_axis": False, "grouped": False, "compression": False},
     "brss_no_mamba": {"use_mamba": False},
     "brss_no_compression": {"compression": False},

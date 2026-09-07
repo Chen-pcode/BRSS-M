@@ -6,7 +6,11 @@ import sys
 from pathlib import Path
 
 MODELS = [
+    # Mamba placement (A-D): 32x32, 32x32+16x16, 32x32+16x16+8x8, 16x16.
     "brss_hgm_mamba",
+    "brss_s3_s4_mamba",
+    "brss_s3_s4_s5_mamba",
+    "brss_s4_mamba",
     "brss_raster_mamba",
     "brss_no_mamba",
     "brss_no_compression",

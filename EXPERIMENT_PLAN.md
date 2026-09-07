@@ -24,7 +24,10 @@ with low-dimensional shared state-space scans.
 
 | Variant | Tests | Expected evidence |
 | --- | --- | --- |
-| HGM-Mamba | Full six-level model with compressed, grouped shared row/column Mamba at 32 x 32 | Reference result |
+| HGM-Mamba (S3) | Full six-level model with compressed, grouped shared row/column Mamba at 32 x 32 | Reference result and high-resolution long-sequence modeling |
+| HGM-Mamba (S3+S4) | Same HGM block at 32 x 32 and 16 x 16 | Value of a deep semantic supplement |
+| HGM-Mamba (S3+S4+S5) | Same HGM block at 32 x 32, 16 x 16 and 8 x 8 | Whether progressive all-deep Mamba is beneficial |
+| HGM-Mamba (S4 only) | Same HGM block at 16 x 16 only | Low-resolution Mamba placement baseline |
 | Plain Raster Mamba | One uncompressed row-major Mamba scan at 32 x 32 | High-resolution Mamba baseline |
 | w/o Mamba | CNN-only encoder at the deep stages | Value of Mamba global modeling |
 | w/o compression | Keep full Mamba channel width | Value of channel compression |
