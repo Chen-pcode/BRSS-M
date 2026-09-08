@@ -19,6 +19,17 @@ LOSS_ABLATIONS = {
     "brss_final_boundary_only": {"no_multiscale_boundary_loss": True},
 }
 
+# The decoder-bridge study uses only the final decoder boundary prediction.
+# This is fixed by model name so every command in the controlled suite shares
+# the loss configuration.
+FINAL_BOUNDARY_MODELS = {
+    "brss_cnn_final_boundary",
+    "brss_raster_final_boundary",
+    "brss_decoder_mamba_bridge",
+    "brss_mask_guided_fusion",
+    "brss_mgmb_mamba_bridge",
+}
+
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train Boundary-Routed Selective State Space MambaSeg.")
@@ -70,6 +81,8 @@ def main() -> None:
         for option, value in LOSS_ABLATIONS[loss_ablation].items():
             setattr(args, option, value)
         args.model = "brss_hgm_mamba"
+    elif args.model in FINAL_BOUNDARY_MODELS:
+        args.no_multiscale_boundary_loss = True
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
     log_path = out / "train.log"

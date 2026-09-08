@@ -36,6 +36,29 @@ with low-dimensional shared state-space scans.
 | Final boundary supervision only | Remove deep boundary supervision | Multi-scale structural supervision |
 | w/o boundary loss | Keep architecture, remove all boundary loss | Objective-level contribution |
 
+## Decoder-Bridge Study
+
+The high-resolution encoder HGM study did not establish a stable advantage
+over CNN-only segmentation. The next study therefore removes encoder Mamba and
+tests whether decoder-side semantic localization makes state-space context more
+selective. A 16 x 16 decoder feature predicts a coarse lesion map, which is
+upsampled to guide the following 32 x 32 cross-scale fusion. The full bridge
+softly separates lesion and background streams, scans both with a shared
+Raster Mamba, and fuses them through a residual projection. The predicted map,
+not a ground-truth mask, is used at both training and inference.
+
+| Variant | Tests | Fixed loss |
+| --- | --- | --- |
+| CNN-only final-boundary | Strong no-Mamba baseline | Segmentation plus final boundary loss |
+| Encoder Raster Mamba final-boundary | Existing Mamba baseline | Segmentation plus final boundary loss |
+| Decoder Mamba bridge | Decoder placement without mask conditioning | Segmentation plus final boundary loss |
+| Mask-guided fusion | Coarse-mask grouping without Mamba | Segmentation plus final boundary loss |
+| Full MGMB | Mask-conditioned shared lesion/background Mamba bridge | Segmentation plus final boundary loss |
+
+The full model is supported only when it exceeds both Mamba and CNN baselines
+over three seeds, particularly on PH2 Dice and HD95, without a material drop
+on either ISIC evaluation set.
+
 
 Do not claim a component improves performance unless its three-seed mean and
 paired per-image Dice comparison are consistent. Report both segmentation and

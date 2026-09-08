@@ -6,6 +6,12 @@ import sys
 from pathlib import Path
 
 MODELS = [
+    # Controlled coarse-mask-conditioned decoder-bridge study.
+    "brss_cnn_final_boundary",
+    "brss_raster_final_boundary",
+    "brss_decoder_mamba_bridge",
+    "brss_mask_guided_fusion",
+    "brss_mgmb_mamba_bridge",
     # Mamba placement (A-D): 32x32, 32x32+16x16, 32x32+16x16+8x8, 16x16.
     "brss_hgm_mamba",
     "brss_s3_s4_mamba",

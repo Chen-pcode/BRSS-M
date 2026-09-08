@@ -10,6 +10,12 @@ are compressed and split into two groups before the Mamba scan, with groups
 folded into the batch dimension to share all Mamba parameters. The model is
 therefore Mamba-based, but it is not a VMamba/SS2D reproduction.
 
+The current candidate direction is a coarse-mask-conditioned Mamba bridge.
+It uses a predicted 16 x 16 decoder mask to split the following 32 x 32
+cross-scale fusion into soft lesion and background streams, scans both streams
+with one shared Raster Mamba, and restores them through a residual fusion.
+No ground-truth mask enters this bridge at inference or training.
+
 ## Layout
 
 ```
@@ -55,7 +61,7 @@ python train.py --model brss_final_boundary_only --amp --output-dir /kaggle/work
 python run_ablations.py --amp --output-root /kaggle/working/ablation --skip-completed
 ```
 
-The core suite is 33 training jobs for ISIC2018 (11 variants x 3 seeds): four
+The HGM suite is 33 training jobs for ISIC2018 (11 variants x 3 seeds): four
 Mamba-placement variants (32 x 32; 32 x 32 + 16 x 16; 32 x 32 + 16 x 16 + 8 x
 8; and 16 x 16 only), plain Raster Mamba, no-Mamba, no-compression,
 no-grouping, single-axis, no-boundary-loss and final-boundary-only variants. Run
@@ -64,6 +70,14 @@ Repeat it on ISIC2017 with:
 
 ```bash
 python run_ablations.py --train-dataset isic2017 --val-dataset isic2017 --test-datasets isic2018 PH2 --amp --output-root /kaggle/working/ablation_isic2017
+```
+
+Run the decoder-bridge study separately. Its five variants all use final
+boundary supervision only: CNN-only, encoder Raster Mamba, decoder Mamba
+without a mask, mask-guided fusion without Mamba, and the full bridge.
+
+```bash
+python run_ablations.py --models brss_cnn_final_boundary brss_raster_final_boundary brss_decoder_mamba_bridge brss_mask_guided_fusion brss_mgmb_mamba_bridge --seeds 2026 --amp --output-root /kaggle/working/mgmb_ablation
 ```
 
 ## Data Layout

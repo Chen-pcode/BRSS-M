@@ -128,6 +128,52 @@ class BoundaryFusion(nn.Module):
         return self.mix(fusion), self.boundary(fusion)
 
 
+class MaskGuidedMambaBridge(nn.Module):
+    """Refines a 32x32 decoder fusion with a predicted coarse lesion mask."""
+
+    def __init__(self, channels: int, mask_guided: bool, use_mamba: bool):
+        super().__init__()
+        if use_mamba and Mamba is None:
+            raise ImportError(
+                "MambaSeg requires mamba-ssm. Install a CUDA-compatible build with "
+                "`pip install --no-build-isolation mamba-ssm causal-conv1d`."
+            )
+        self.mask_guided = mask_guided
+        self.use_mamba = use_mamba
+        inner_channels = max(8, channels // 2)
+        self.reduce = nn.Conv2d(channels, inner_channels, 1)
+        self.norm = nn.LayerNorm(inner_channels)
+        # The same state-space model processes lesion and background streams.
+        # Folding streams into the batch dimension prevents a parameter increase.
+        self.mamba = Mamba(d_model=inner_channels, d_state=16, d_conv=4, expand=2) if use_mamba else None
+        stream_count = 2 if mask_guided else 1
+        self.fuse = nn.Conv2d(inner_channels * stream_count, inner_channels, 1)
+        self.expand = nn.Conv2d(inner_channels, channels, 1)
+        self.out = ConvNormAct(channels, channels, 1)
+
+    def _scan(self, feature: torch.Tensor) -> torch.Tensor:
+        if self.mamba is None:
+            return feature
+        height, width = feature.shape[-2:]
+        tokens = feature.flatten(2).transpose(1, 2)
+        tokens = self.mamba(self.norm(tokens))
+        return tokens.transpose(1, 2).reshape(feature.shape[0], feature.shape[1], height, width)
+
+    def forward(self, x: torch.Tensor, coarse_logits: torch.Tensor) -> torch.Tensor:
+        feature = self.reduce(x)
+        if self.mask_guided:
+            lesion_probability = coarse_logits.sigmoid()
+            streams = torch.stack(
+                (feature * lesion_probability, feature * (1 - lesion_probability)), dim=1
+            )
+            batch, stream_count, channels, height, width = streams.shape
+            streams = self._scan(streams.reshape(batch * stream_count, channels, height, width))
+            feature = streams.reshape(batch, stream_count * channels, height, width)
+        else:
+            feature = self._scan(feature)
+        return x + self.out(self.expand(self.fuse(feature)))
+
+
 class BRSSMambaSeg(nn.Module):
     """Six-resolution local-global skin lesion segmenter using official Mamba."""
 
@@ -140,6 +186,9 @@ class BRSSMambaSeg(nn.Module):
         dual_axis: bool = True,
         grouped: bool = True,
         mamba_indices: tuple[int, ...] = (3,),
+        decoder_bridge: bool = False,
+        bridge_mask_guided: bool = False,
+        bridge_use_mamba: bool = False,
     ):
         super().__init__()
         if stages not in {4, 5, 6}:
@@ -159,6 +208,17 @@ class BRSSMambaSeg(nn.Module):
         self.decoder = nn.ModuleList()
         for index in range(stages - 1, 0, -1):
             self.decoder.append(BoundaryFusion(widths[index], widths[index - 1], widths[index - 1]))
+        self.decoder_bridge = decoder_bridge
+        if decoder_bridge and stages != 6:
+            raise ValueError("The mask-guided decoder bridge is defined for the six-stage architecture")
+        # After the first decoder fusion, this head predicts a 16x16 coarse
+        # lesion map. It is upsampled to condition the following 32x32 bridge.
+        self.coarse_mask = nn.Conv2d(widths[4], 1, 1) if decoder_bridge else None
+        self.bridge = (
+            MaskGuidedMambaBridge(widths[3], bridge_mask_guided, bridge_use_mamba)
+            if decoder_bridge
+            else None
+        )
         self.output = nn.Conv2d(widths[0], 1, 1)
         self.auxiliary = nn.ModuleList([nn.Conv2d(widths[1], 1, 1), nn.Conv2d(widths[2], 1, 1)])
 
@@ -170,8 +230,13 @@ class BRSSMambaSeg(nn.Module):
             boundary_scales.append(boundary_prior)
         decoded, boundaries = features[-1], []
         decoder_features = []
-        for block, skip in zip(self.decoder, reversed(features[:-1])):
+        for index, (block, skip) in enumerate(zip(self.decoder, reversed(features[:-1]))):
             decoded, boundary = block(decoded, skip)
+            if index == 0 and self.coarse_mask is not None:
+                coarse_logits = self.coarse_mask(decoded)
+            if index == 1 and self.bridge is not None:
+                coarse_logits = F.interpolate(coarse_logits, size=decoded.shape[-2:], mode="bilinear", align_corners=False)
+                decoded = self.bridge(decoded, coarse_logits)
             decoder_features.append(decoded)
             boundaries.append(boundary)
         logits = self.output(decoded)
@@ -194,6 +259,28 @@ ABLATIONS = {
     "brss_no_compression": {"compression": False},
     "brss_no_grouping": {"grouped": False},
     "brss_single_axis": {"dual_axis": False},
+    # Decoder bridge study. Encoder Mamba is disabled in all bridge variants,
+    # so the comparison isolates decoder placement and mask conditioning.
+    "brss_cnn_final_boundary": {"use_mamba": False},
+    "brss_raster_final_boundary": {"dual_axis": False, "grouped": False, "compression": False},
+    "brss_decoder_mamba_bridge": {
+        "use_mamba": False,
+        "decoder_bridge": True,
+        "bridge_mask_guided": False,
+        "bridge_use_mamba": True,
+    },
+    "brss_mask_guided_fusion": {
+        "use_mamba": False,
+        "decoder_bridge": True,
+        "bridge_mask_guided": True,
+        "bridge_use_mamba": False,
+    },
+    "brss_mgmb_mamba_bridge": {
+        "use_mamba": False,
+        "decoder_bridge": True,
+        "bridge_mask_guided": True,
+        "bridge_use_mamba": True,
+    },
 }
 
 
