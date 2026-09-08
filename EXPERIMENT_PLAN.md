@@ -54,6 +54,8 @@ not a ground-truth mask, is used at both training and inference.
 | Decoder Mamba bridge | Decoder placement without mask conditioning | Segmentation plus final boundary loss |
 | Mask-guided fusion | Coarse-mask grouping without Mamba | Segmentation plus final boundary loss |
 | Full MGMB | Mask-conditioned shared lesion/background Mamba bridge | Segmentation plus final boundary loss |
+| Uniform-mask MGMB | Replace the predicted spatial mask with a constant 0.5 map while retaining two streams and Mamba | Segmentation plus final boundary loss |
+| MGMB at 16 x 16 | Move the complete bridge to the first 16 x 16 decoder fusion | Segmentation plus final boundary loss |
 
 The full model is supported only when it exceeds both Mamba and CNN baselines
 over three seeds, particularly on PH2 Dice and HD95, without a material drop

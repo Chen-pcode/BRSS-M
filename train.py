@@ -28,6 +28,8 @@ FINAL_BOUNDARY_MODELS = {
     "brss_decoder_mamba_bridge",
     "brss_mask_guided_fusion",
     "brss_mgmb_mamba_bridge",
+    "brss_uniform_mask_mgmb",
+    "brss_mgmb_16_bridge",
 }
 
 

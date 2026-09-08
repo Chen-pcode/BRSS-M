@@ -12,6 +12,8 @@ MODELS = [
     "brss_decoder_mamba_bridge",
     "brss_mask_guided_fusion",
     "brss_mgmb_mamba_bridge",
+    "brss_uniform_mask_mgmb",
+    "brss_mgmb_16_bridge",
     # Mamba placement (A-D): 32x32, 32x32+16x16, 32x32+16x16+8x8, 16x16.
     "brss_hgm_mamba",
     "brss_s3_s4_mamba",
@@ -40,6 +42,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--models", nargs="*", choices=MODELS, default=MODELS)
     parser.add_argument("--seeds", nargs="*", type=int, default=[42, 1234, 2026])
     parser.add_argument("--epochs", type=int, default=300)
+    parser.add_argument("--patience", type=int, default=60)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--image-size", type=int, default=256)
     parser.add_argument("--workers", type=int, default=2)
@@ -60,7 +63,7 @@ def main() -> None:
             if args.skip_completed and (output_dir / "summary.csv").exists():
                 print(f"Skipping completed run: {output_dir}")
                 continue
-            command = [sys.executable, "train.py", "--data-root", args.data_root, "--isic2017-root", args.isic2017_root, "--isic2018-root", args.isic2018_root, "--ph2-root", args.ph2_root, "--train-dataset", args.train_dataset, "--val-dataset", args.val_dataset, "--test-datasets", *args.test_datasets, "--model", actual_model, "--experiment-name", model, "--output-dir", str(output_dir), "--epochs", str(args.epochs), "--batch-size", str(args.batch_size), "--image-size", str(args.image_size), "--workers", str(args.workers), "--seed", str(seed)]
+            command = [sys.executable, "train.py", "--data-root", args.data_root, "--isic2017-root", args.isic2017_root, "--isic2018-root", args.isic2018_root, "--ph2-root", args.ph2_root, "--train-dataset", args.train_dataset, "--val-dataset", args.val_dataset, "--test-datasets", *args.test_datasets, "--model", actual_model, "--experiment-name", model, "--output-dir", str(output_dir), "--epochs", str(args.epochs), "--patience", str(args.patience), "--batch-size", str(args.batch_size), "--image-size", str(args.image_size), "--workers", str(args.workers), "--seed", str(seed)]
             if model == "brss_no_boundary_loss":
                 command.append("--no-boundary-loss")
             if model == "brss_final_boundary_only":

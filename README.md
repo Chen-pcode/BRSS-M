@@ -72,12 +72,13 @@ Repeat it on ISIC2017 with:
 python run_ablations.py --train-dataset isic2017 --val-dataset isic2017 --test-datasets isic2018 PH2 --amp --output-root /kaggle/working/ablation_isic2017
 ```
 
-Run the decoder-bridge study separately. Its five variants all use final
+Run the decoder-bridge study separately. Its seven variants all use final
 boundary supervision only: CNN-only, encoder Raster Mamba, decoder Mamba
-without a mask, mask-guided fusion without Mamba, and the full bridge.
+without a mask, mask-guided fusion without Mamba, the full bridge, a uniform
+0.5-mask bridge, and a 16 x 16 bridge.
 
 ```bash
-python run_ablations.py --models brss_cnn_final_boundary brss_raster_final_boundary brss_decoder_mamba_bridge brss_mask_guided_fusion brss_mgmb_mamba_bridge --seeds 2026 --amp --output-root /kaggle/working/mgmb_ablation
+python run_ablations.py --models brss_cnn_final_boundary brss_raster_final_boundary brss_decoder_mamba_bridge brss_mask_guided_fusion brss_mgmb_mamba_bridge brss_uniform_mask_mgmb brss_mgmb_16_bridge --seeds 2026 --patience 60 --amp --output-root /kaggle/working/mgmb_ablation
 ```
 
 ## Data Layout
