@@ -1,8 +1,8 @@
 # BRSS-MambaSeg
 
 BRSS-MambaSeg is an isolated, Kaggle-ready research project for skin lesion
-segmentation. It uses official `mamba-ssm` Mamba blocks to build global context
-at low-resolution encoder features, with multi-scale boundary supervision.
+segmentation. The paper-facing model is a lightweight Raster Mamba encoder
+with final boundary supervision.
 
 `HighResolutionGroupedMamba` applies one shared official Mamba block to
 row-major and column-major sequences at the 32 x 32 feature level. Channels
@@ -10,7 +10,7 @@ are compressed and split into two groups before the Mamba scan, with groups
 folded into the batch dimension to share all Mamba parameters. The model is
 therefore Mamba-based, but it is not a VMamba/SS2D reproduction.
 
-The current candidate direction is a coarse-mask-conditioned Mamba bridge.
+An exploratory candidate direction is a coarse-mask-conditioned Mamba bridge.
 It uses a predicted 16 x 16 decoder mask to split the following 32 x 32
 cross-scale fusion into soft lesion and background streams, scans both streams
 with one shared Raster Mamba, and restores them through a residual fusion.
@@ -43,7 +43,7 @@ pip install --no-build-isolation mamba-ssm causal-conv1d
 3. Run a smoke test before a full experiment:
 
 ```bash
-python train.py --model brss_hgm_mamba --epochs 2 --batch-size 16 --workers 2 --amp --output-dir /kaggle/working/smoke
+python train.py --model brss_raster_final_boundary --epochs 2 --batch-size 16 --workers 2 --amp --output-dir /kaggle/working/smoke
 ```
 
 Loss-function ablations can be run directly with their experiment names. They
@@ -54,18 +54,20 @@ python train.py --model brss_no_boundary_loss --amp --output-dir /kaggle/working
 python train.py --model brss_final_boundary_only --amp --output-dir /kaggle/working/final_boundary_only
 ```
 
-4. Run one proposed-model seed, inspect `config.json`, `history.csv`, and
-   `summary.csv`, then run the controlled suite:
+4. Run one Raster Mamba seed, inspect `config.json`, `history.csv`, and
+   `summary.csv`, then run the six-model paper-facing suite:
 
 ```bash
 python run_ablations.py --amp --output-root /kaggle/working/ablation --skip-completed
 ```
 
-The HGM suite is 33 training jobs for ISIC2018 (11 variants x 3 seeds): four
-Mamba-placement variants (32 x 32; 32 x 32 + 16 x 16; 32 x 32 + 16 x 16 + 8 x
-8; and 16 x 16 only), plain Raster Mamba, no-Mamba, no-compression,
-no-grouping, single-axis, no-boundary-loss and final-boundary-only variants. Run
-the full suite only after the smoke test and one single-seed full-model run.
+The default suite runs six models across three seeds: Raster Mamba, CNN-only,
+decoder Mamba, full MGMB, uniform-mask MGMB, and the 16 x 16 bridge control.
+
+The default paper-facing suite contains the Raster Mamba main model, CNN-only
+baseline, decoder controls, and the exploratory MGMB controls. Earlier HGM
+placement and boundary-loss variants remain available as explicit model names,
+but are not part of the paper's main claim.
 Repeat it on ISIC2017 with:
 
 ```bash
@@ -80,6 +82,9 @@ without a mask, mask-guided fusion without Mamba, the full bridge, a uniform
 ```bash
 python run_ablations.py --models brss_cnn_final_boundary brss_raster_final_boundary brss_decoder_mamba_bridge brss_mask_guided_fusion brss_mgmb_mamba_bridge brss_uniform_mask_mgmb brss_mgmb_16_bridge --seeds 2026 --patience 60 --amp --output-root /kaggle/working/mgmb_ablation
 ```
+
+`PAPER_DRAFT.md` contains the current manuscript structure, result wording,
+three-seed table, and the remaining submission checklist.
 
 ## Data Layout
 

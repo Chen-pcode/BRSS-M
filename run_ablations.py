@@ -5,17 +5,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-MODELS = [
-    # Controlled coarse-mask-conditioned decoder-bridge study.
-    "brss_cnn_final_boundary",
+PAPER_MODELS = [
+    # Paper-facing suite: main model, strong CNN/Mamba baselines and the
+    # two most informative decoder controls.
     "brss_raster_final_boundary",
+    "brss_cnn_final_boundary",
     "brss_decoder_mamba_bridge",
-    "brss_mask_guided_fusion",
     "brss_mgmb_mamba_bridge",
     "brss_uniform_mask_mgmb",
     "brss_mgmb_16_bridge",
-    # Mamba placement (A-D): 32x32, 32x32+16x16, 32x32+16x16+8x8, 16x16.
+]
+
+LEGACY_MODELS = [
+    # Earlier exploratory variants remain callable explicitly when needed.
     "brss_hgm_mamba",
+    # Mamba placement (A-D): 32x32, 32x32+16x16, 32x32+16x16+8x8, 16x16.
     "brss_s3_s4_mamba",
     "brss_s3_s4_s5_mamba",
     "brss_s4_mamba",
@@ -28,6 +32,8 @@ MODELS = [
     "brss_final_boundary_only",
 ]
 
+MODELS = PAPER_MODELS + LEGACY_MODELS
+
 
 def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Controlled BRSS-MambaSeg ablation suite.")
@@ -39,7 +45,7 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--train-dataset", default="isic2018")
     parser.add_argument("--val-dataset", default="isic2018")
     parser.add_argument("--test-datasets", nargs="*", default=["isic2017", "PH2"])
-    parser.add_argument("--models", nargs="*", choices=MODELS, default=MODELS)
+    parser.add_argument("--models", nargs="*", choices=MODELS, default=PAPER_MODELS)
     parser.add_argument("--seeds", nargs="*", type=int, default=[42, 1234, 2026])
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--patience", type=int, default=60)
