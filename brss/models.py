@@ -99,18 +99,127 @@ class HighResolutionGroupedMamba(nn.Module):
         return x + self.out(self.expand(reduced))
 
 
+class BoundaryPreservingRasterMamba(nn.Module):
+    """Boundary-conditioned residual update for one row-major Mamba scan.
+
+    The official Mamba operator is kept unchanged. A predicted boundary
+    probability controls how much of its residual update is accepted, reducing
+    state-space feature propagation at uncertain lesion borders.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        use_boundary_signal: bool = True,
+        use_uncertainty: bool = True,
+        fixed_gate: bool = False,
+        direct_modulation: bool = False,
+        preserve_local_residual: bool = True,
+        scan_axis: str = "row",
+    ):
+        super().__init__()
+        if Mamba is None:
+            raise ImportError(
+                "MambaSeg requires mamba-ssm. Install a CUDA-compatible build with "
+                "`pip install --no-build-isolation mamba-ssm causal-conv1d`."
+            )
+        self.use_boundary_signal = use_boundary_signal
+        self.use_uncertainty = use_uncertainty
+        self.fixed_gate = fixed_gate
+        self.direct_modulation = direct_modulation
+        self.preserve_local_residual = preserve_local_residual
+        if scan_axis not in {"row", "column"}:
+            raise ValueError("scan_axis must be 'row' or 'column'")
+        self.scan_axis = scan_axis
+        self.norm = nn.LayerNorm(channels)
+        self.mamba = Mamba(d_model=channels, d_state=16, d_conv=4, expand=2)
+        if not fixed_gate and not direct_modulation:
+            gate_inputs = channels + (1 if use_boundary_signal else 0) + (1 if use_boundary_signal and use_uncertainty else 0)
+            self.gate = nn.Sequential(nn.Linear(gate_inputs, 1), nn.Sigmoid())
+        else:
+            self.gate = None
+        self.out = ConvNormAct(channels, channels, 1)
+
+    def forward(self, x: torch.Tensor, boundary_logits: torch.Tensor) -> torch.Tensor:
+        height, width = x.shape[-2:]
+        scan_x = x.transpose(2, 3) if self.scan_axis == "column" else x
+        scan_boundary = boundary_logits.transpose(2, 3) if self.scan_axis == "column" else boundary_logits
+        scan_height, scan_width = scan_x.shape[-2:]
+        raw_tokens = scan_x.flatten(2).transpose(1, 2)
+        normalized = self.norm(raw_tokens)
+        scanned = self.mamba(normalized)
+
+        probability = scan_boundary.sigmoid().flatten(2).transpose(1, 2)
+        uncertainty = 4.0 * probability * (1.0 - probability)
+        if self.direct_modulation:
+            refined = scanned * (1.0 - 0.5 * probability)
+        elif self.fixed_gate:
+            learned_gate = torch.ones_like(probability)
+        elif self.use_boundary_signal:
+            gate_parts = [normalized, probability]
+            if self.use_uncertainty:
+                gate_parts.append(uncertainty)
+            gate_input = torch.cat(gate_parts, dim=-1)
+            learned_gate = self.gate(gate_input)
+        else:
+            learned_gate = self.gate(normalized)
+
+        if not self.direct_modulation:
+            # A fixed factor makes the mechanism explicitly boundary
+            # preserving; the learned gate adapts the update to feature content.
+            boundary_factor = 1.0 - 0.5 * uncertainty if self.use_uncertainty else 1.0
+            update_gate = learned_gate * boundary_factor
+            refined = normalized + update_gate * (scanned - normalized)
+        feature = refined.transpose(1, 2).reshape(x.shape[0], x.shape[1], scan_height, scan_width)
+        if self.scan_axis == "column":
+            feature = feature.transpose(2, 3)
+        output = self.out(feature)
+        return x + output if self.preserve_local_residual else output
+
+
 class EncoderStage(nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, stride: int, use_mamba: bool, compression: bool, dual_axis: bool, grouped: bool):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        stride: int,
+        use_mamba: bool,
+        compression: bool,
+        dual_axis: bool,
+        grouped: bool,
+        boundary_gated: bool = False,
+        boundary_signal: bool = True,
+        boundary_uncertainty: bool = True,
+        fixed_boundary_gate: bool = False,
+        direct_boundary_modulation: bool = False,
+        preserve_local_residual: bool = True,
+        scan_axis: str = "row",
+    ):
         super().__init__()
         self.conv = DepthwiseResidual(in_channels, out_channels, stride)
         self.prior = nn.Conv2d(out_channels, 1, 1)
-        self.mamba = HighResolutionGroupedMamba(out_channels, compression, dual_axis, grouped) if use_mamba else nn.Identity()
+        if use_mamba and boundary_gated:
+            self.mamba = BoundaryPreservingRasterMamba(
+                out_channels,
+                use_boundary_signal=boundary_signal,
+                use_uncertainty=boundary_uncertainty,
+                fixed_gate=fixed_boundary_gate,
+                direct_modulation=direct_boundary_modulation,
+                preserve_local_residual=preserve_local_residual,
+                scan_axis=scan_axis,
+            )
+        elif use_mamba:
+            self.mamba = HighResolutionGroupedMamba(out_channels, compression, dual_axis, grouped)
+        else:
+            self.mamba = nn.Identity()
+        self.boundary_gated = boundary_gated and use_mamba
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         x = self.conv(x)
         boundary_prior = self.prior(x)
-        feature = self.mamba(x) if isinstance(self.mamba, HighResolutionGroupedMamba) else self.mamba(x)
-        return feature, boundary_prior
+        feature = self.mamba(x, boundary_prior) if self.boundary_gated else self.mamba(x)
+        guidance = boundary_prior if self.boundary_gated else None
+        return feature, boundary_prior, guidance
 
 
 class BoundaryFusion(nn.Module):
@@ -192,6 +301,13 @@ class BRSSMambaSeg(nn.Module):
         bridge_use_mamba: bool = False,
         bridge_index: int = 1,
         bridge_uniform_mask: bool = False,
+        boundary_gated: bool = False,
+        boundary_signal: bool = True,
+        boundary_uncertainty: bool = True,
+        fixed_boundary_gate: bool = False,
+        direct_boundary_modulation: bool = False,
+        preserve_local_residual: bool = True,
+        scan_axis: str = "row",
     ):
         super().__init__()
         if stages not in {4, 5, 6}:
@@ -207,7 +323,24 @@ class BRSSMambaSeg(nn.Module):
         # 32x32, 16x16 and 8x8 features. The stage-location ablations keep
         # every other HGM component fixed and vary only this placement.
         for index in range(1, stages):
-            self.encoder.append(EncoderStage(widths[index - 1], widths[index], 2, use_mamba and index in mamba_indices, compression, dual_axis, grouped))
+            self.encoder.append(
+                EncoderStage(
+                    widths[index - 1],
+                    widths[index],
+                    2,
+                    use_mamba and index in mamba_indices,
+                    compression,
+                    dual_axis,
+                    grouped,
+                    boundary_gated=boundary_gated and index in mamba_indices,
+                    boundary_signal=boundary_signal,
+                    boundary_uncertainty=boundary_uncertainty,
+                    fixed_boundary_gate=fixed_boundary_gate,
+                    direct_boundary_modulation=direct_boundary_modulation,
+                    preserve_local_residual=preserve_local_residual,
+                    scan_axis=scan_axis,
+                )
+            )
         self.decoder = nn.ModuleList()
         for index in range(stages - 1, 0, -1):
             self.decoder.append(BoundaryFusion(widths[index], widths[index - 1], widths[index - 1]))
@@ -232,11 +365,13 @@ class BRSSMambaSeg(nn.Module):
         self.auxiliary = nn.ModuleList([nn.Conv2d(widths[1], 1, 1), nn.Conv2d(widths[2], 1, 1)])
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor | list[torch.Tensor]]:
-        features, boundary_scales = [self.stem(x)], []
+        features, boundary_scales, boundary_guidance = [self.stem(x)], [], []
         for block in self.encoder:
-            feature, boundary_prior = block(features[-1])
+            feature, boundary_prior, guidance = block(features[-1])
             features.append(feature)
             boundary_scales.append(boundary_prior)
+            if guidance is not None:
+                boundary_guidance.append(guidance)
         decoded, boundaries = features[-1], []
         decoder_features = []
         coarse_logits = self.coarse_mask(decoded) if self.bridge is not None and self.bridge_index == 0 else None
@@ -256,7 +391,13 @@ class BRSSMambaSeg(nn.Module):
         aux = []
         for head, feature in zip(self.auxiliary, reversed(decoder_features[-3:-1])):
             aux.append(F.interpolate(head(feature), size=logits.shape[-2:], mode="bilinear", align_corners=False))
-        return {"logits": logits, "boundary": boundary, "boundary_scales": boundary_scales, "aux": aux}
+        return {
+            "logits": logits,
+            "boundary": boundary,
+            "boundary_scales": boundary_scales,
+            "boundary_guidance": boundary_guidance,
+            "aux": aux,
+        }
 
 
 ABLATIONS = {
@@ -306,6 +447,54 @@ ABLATIONS = {
         "bridge_mask_guided": True,
         "bridge_use_mamba": True,
         "bridge_index": 0,
+    },
+    # Boundary-Preserving Selective Raster Mamba (BPSR) study. The Mamba block
+    # remains at 32x32; only the boundary-conditioned update rule changes.
+    "brss_bpsr_mamba": {
+        "use_mamba": True,
+        "boundary_gated": True,
+        "boundary_signal": True,
+        "boundary_uncertainty": True,
+    },
+    "brss_bpsr_no_uncertainty": {
+        "use_mamba": True,
+        "boundary_gated": True,
+        "boundary_signal": True,
+        "boundary_uncertainty": False,
+    },
+    "brss_bpsr_fixed_gate": {
+        "use_mamba": True,
+        "boundary_gated": True,
+        "boundary_signal": True,
+        "boundary_uncertainty": True,
+        "fixed_boundary_gate": True,
+    },
+    "brss_bpsr_no_boundary_signal": {
+        "use_mamba": True,
+        "boundary_gated": True,
+        "boundary_signal": False,
+        "boundary_uncertainty": False,
+    },
+    "brss_bpsr_direct_modulation": {
+        "use_mamba": True,
+        "boundary_gated": True,
+        "boundary_signal": True,
+        "boundary_uncertainty": False,
+        "direct_boundary_modulation": True,
+    },
+    "brss_bpsr_no_local_residual": {
+        "use_mamba": True,
+        "boundary_gated": True,
+        "boundary_signal": True,
+        "boundary_uncertainty": True,
+        "preserve_local_residual": False,
+    },
+    "brss_bpsr_column_scan": {
+        "use_mamba": True,
+        "boundary_gated": True,
+        "boundary_signal": True,
+        "boundary_uncertainty": True,
+        "scan_axis": "column",
     },
 }
 

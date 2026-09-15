@@ -6,17 +6,25 @@ import sys
 from pathlib import Path
 
 PAPER_MODELS = [
-    # Paper-facing suite: main model, strong CNN/Mamba baselines and the
-    # two most informative decoder controls.
+    # BPSR pilot: baseline plus the controls that isolate the proposed update.
     "brss_raster_final_boundary",
     "brss_cnn_final_boundary",
-    "brss_decoder_mamba_bridge",
-    "brss_mgmb_mamba_bridge",
-    "brss_uniform_mask_mgmb",
-    "brss_mgmb_16_bridge",
+    "brss_bpsr_mamba",
+    "brss_bpsr_no_uncertainty",
+    "brss_bpsr_fixed_gate",
+    "brss_bpsr_no_boundary_signal",
+    "brss_bpsr_direct_modulation",
+    "brss_bpsr_no_local_residual",
+    "brss_bpsr_column_scan",
 ]
 
 LEGACY_MODELS = [
+    # Earlier decoder mask-guided experiments remain callable explicitly.
+    "brss_decoder_mamba_bridge",
+    "brss_mask_guided_fusion",
+    "brss_mgmb_mamba_bridge",
+    "brss_uniform_mask_mgmb",
+    "brss_mgmb_16_bridge",
     # Earlier exploratory variants remain callable explicitly when needed.
     "brss_hgm_mamba",
     # Mamba placement (A-D): 32x32, 32x32+16x16, 32x32+16x16+8x8, 16x16.

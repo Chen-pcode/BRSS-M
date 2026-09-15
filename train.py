@@ -30,6 +30,13 @@ FINAL_BOUNDARY_MODELS = {
     "brss_mgmb_mamba_bridge",
     "brss_uniform_mask_mgmb",
     "brss_mgmb_16_bridge",
+    "brss_bpsr_mamba",
+    "brss_bpsr_no_uncertainty",
+    "brss_bpsr_fixed_gate",
+    "brss_bpsr_no_boundary_signal",
+    "brss_bpsr_direct_modulation",
+    "brss_bpsr_no_local_residual",
+    "brss_bpsr_column_scan",
 }
 
 

@@ -61,6 +61,35 @@ The full model is supported only when it exceeds both Mamba and CNN baselines
 over three seeds, particularly on PH2 Dice and HD95, without a material drop
 on either ISIC evaluation set.
 
+## Boundary-Preserving Raster Study
+
+The encoder Raster baseline is extended with a boundary-conditioned residual
+update. A boundary logit is predicted from the 32 x 32 feature before the
+Mamba scan. Let `p_t` be its probability and `u_t = 4p_t(1-p_t)` its
+uncertainty. The full BPSR block computes a learned scalar gate from the token,
+`p_t`, and `u_t`, then accepts the Mamba residual update using
+`g_t(1 - 0.5u_t)`. This is a feature-update gate around the official Mamba
+operator; it does not modify the fused selective-scan kernel. The boundary
+prediction is supervised without providing a ground-truth mask to the forward
+path.
+
+| Variant | Tests | Fixed loss |
+| --- | --- | --- |
+| Raster baseline | Existing single row-major Mamba | Final boundary supervision |
+| Direct boundary modulation | Directly modulate scanned features with predicted boundary probability | Final boundary plus guidance supervision |
+| Full BPSR | Learned token and boundary gate with uncertainty factor | Final boundary plus guidance supervision |
+| BPSR without uncertainty | Remove the explicit uncertainty factor and uncertainty input | Final boundary plus guidance supervision |
+| BPSR with fixed gate | Remove learned content gate and retain uncertainty factor | Final boundary plus guidance supervision |
+| BPSR without boundary signal | Learn a token-only gate | Final boundary supervision |
+| BPSR without local residual | Remove the `x + output` local residual connection | Final boundary plus guidance supervision |
+| BPSR column scan | Keep BPSR and change row-major serialization to column-major | Final boundary plus guidance supervision |
+
+The proposed BPSR model is supported only if its three-seed mean improves over
+the Raster baseline on at least one external dataset, does not materially
+degrade the other training-domain protocol, and beats its direct-modulation,
+fixed-gate, and no-uncertainty controls. A single-seed improvement is treated
+as a pilot observation rather than evidence of a contribution.
+
 
 Do not claim a component improves performance unless its three-seed mean and
 paired per-image Dice comparison are consistent. Report both segmentation and

@@ -27,4 +27,11 @@ def total_loss(outputs: dict[str, torch.Tensor | list[torch.Tensor]], target: to
         for boundary_scale in outputs.get("boundary_scales", []):  # type: ignore[arg-type]
             target_scale = F.interpolate(boundary, size=boundary_scale.shape[-2:], mode="nearest")
             loss = loss + 0.1 * F.binary_cross_entropy_with_logits(boundary_scale, target_scale)
+    # BPSR uses the supervised boundary prediction to regulate the Mamba
+    # residual update. This term is separate from multi-scale supervision so
+    # the final-boundary protocol remains comparable across model variants.
+    if use_boundary_loss:
+        for guidance in outputs.get("boundary_guidance", []):  # type: ignore[arg-type]
+            target_guidance = F.interpolate(boundary, size=guidance.shape[-2:], mode="nearest")
+            loss = loss + 0.2 * F.binary_cross_entropy_with_logits(guidance, target_guidance)
     return loss

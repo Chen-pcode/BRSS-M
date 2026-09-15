@@ -4,6 +4,13 @@ BRSS-MambaSeg is an isolated, Kaggle-ready research project for skin lesion
 segmentation. The paper-facing model is a lightweight Raster Mamba encoder
 with final boundary supervision.
 
+The next experimental direction is Boundary-Preserving Selective Raster Mamba
+(BPSR). It predicts a boundary map from the 32 x 32 feature, computes the
+uncertainty `u = 4p(1-p)`, and uses a learned scalar update gate with the fixed
+factor `(1 - 0.5u)` to regulate the Mamba residual update. The official Mamba
+operator remains unchanged; the proposed mechanism controls how much of its
+update is accepted by the feature map.
+
 `HighResolutionGroupedMamba` applies one shared official Mamba block to
 row-major and column-major sequences at the 32 x 32 feature level. Channels
 are compressed and split into two groups before the Mamba scan, with groups
@@ -61,8 +68,23 @@ python train.py --model brss_final_boundary_only --amp --output-dir /kaggle/work
 python run_ablations.py --amp --output-root /kaggle/working/ablation --skip-completed
 ```
 
-The default suite runs six models across three seeds: Raster Mamba, CNN-only,
-decoder Mamba, full MGMB, uniform-mask MGMB, and the 16 x 16 bridge control.
+The default suite runs the Raster baseline, CNN-only, and the BPSR mechanism
+controls. Earlier decoder mask-guided models remain available with explicit
+`--models` arguments.
+
+Run the BPSR pilot before treating it as the final paper model. The following
+eight models include the Raster baseline and isolate direct boundary
+modulation, learned boundary gating, uncertainty, fixed gating, the boundary
+signal, the local residual path, and the scan direction:
+
+```bash
+python run_ablations.py --models brss_raster_final_boundary brss_bpsr_direct_modulation brss_bpsr_mamba brss_bpsr_no_uncertainty brss_bpsr_fixed_gate brss_bpsr_no_boundary_signal brss_bpsr_no_local_residual brss_bpsr_column_scan --seeds 2026 --epochs 300 --patience 60 --batch-size 16 --workers 2 --amp --output-root /kaggle/working/bpsr_pilot_seed2026
+```
+
+The BPSR variants automatically use final decoder boundary loss. Their encoder
+boundary guidance receives an additional supervised loss. If the full BPSR
+variant is promising, repeat the same command with `--seeds 42 1234` and a new
+output root.
 
 The default paper-facing suite contains the Raster Mamba main model, CNN-only
 baseline, decoder controls, and the exploratory MGMB controls. Earlier HGM
@@ -83,8 +105,8 @@ without a mask, mask-guided fusion without Mamba, the full bridge, a uniform
 python run_ablations.py --models brss_cnn_final_boundary brss_raster_final_boundary brss_decoder_mamba_bridge brss_mask_guided_fusion brss_mgmb_mamba_bridge brss_uniform_mask_mgmb brss_mgmb_16_bridge --seeds 2026 --patience 60 --amp --output-root /kaggle/working/mgmb_ablation
 ```
 
-`PAPER_DRAFT.md` contains the current manuscript structure, result wording,
-three-seed table, and the remaining submission checklist.
+The manuscript draft is kept locally and is intentionally not part of the
+repository.
 
 ## Data Layout
 
